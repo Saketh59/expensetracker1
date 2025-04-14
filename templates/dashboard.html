@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div id="dashboard-container">
+        <h2>Welcome, <span id="username"></span>!</h2>
+        <button onclick="logout()">Logout</button>
+        
+        <h3>Manual Expense Entry</h3>
+        <form id="manual-entry-form">
+            <input type="text" id="category" placeholder="Category" required>
+            <input type="text" id="subcategory" placeholder="Subcategory">
+            <input type="text" id="note" placeholder="Note">
+            <input type="number" id="amount" placeholder="Amount" step="0.01" required>
+            <button type="submit">Add Expense</button>
+        </form>
+        
+        <h3>Upload CSV</h3>
+        <input type="file" id="csv-file" accept=".csv">
+        <button onclick="uploadCSV()">Upload CSV</button>
+        
+        <h3>Upload Receipt (OCR)</h3>
+        <input type="file" id="receipt-file" accept="image/*">
+        <button onclick="uploadReceipt()">Upload Receipt</button>
+        
+        <div id="transactions">
+            <h3>Recent Transactions</h3>
+            <p>Loading transactions...</p>
+        </div>
+        
+        <h3>Budget Advisory</h3>
+        <button onclick="getBudgetAdvice()">Get Advice</button>
+        <p id="advice-output"></p>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
