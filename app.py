@@ -7,17 +7,21 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import csv
 import io
+from datetime import datetime
+now = datetime.utcnow().isoformat()
+
 # Optionally you'd use a library for OCR functionality
 # import pytesseract
 # from PIL import Image
 
 app = Flask(__name__,static_folder='static', template_folder='templates')
-app.secret_key = 'your_secret_key_here'  # Change this in production
+app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret')
 
 # Database setup
 def get_db_connection():
     conn = sqlite3.connect('finance_tracker.db')
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
     return conn
 
 def init_db():
@@ -37,6 +41,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('Income', 'Expense')),
         category TEXT NOT NULL,
         subcategory TEXT,
         note TEXT,
@@ -149,9 +154,9 @@ def add_transaction():
     cursor = conn.cursor()
     
     cursor.execute('''
-    INSERT INTO transactions (user_id, category, subcategory, note, amount)
+    INSERT INTO transactions (user_id,type, category, subcategory, note, amount)
     VALUES (?, ?, ?, ?, ?)
-    ''', (session['user_id'], category, subcategory, note, amount))
+    ''',(..., now), (session['user_id'],'Expense', category, subcategory, note, amount))
     
     conn.commit()
     conn.close()
@@ -162,48 +167,62 @@ def add_transaction():
 def upload_csv():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
-    
+
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-    
+
     file = request.files['file']
-    
+
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-    
+
     if not file.filename.endswith('.csv'):
         return jsonify({'error': 'File must be a CSV'}), 400
-    
+
     try:
-        # Read CSV file
+        # Read CSV
         stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
-        csv_reader = csv.DictReader(stream)
-        
+        csv_reader = list(csv.DictReader(stream))
+
+        if not csv_reader:
+            return jsonify({'error': 'CSV is empty or invalid format'}), 400
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        
+
         count = 0
         for row in csv_reader:
-            # Adjust these field names to match your CSV structure
-            category = row.get('category', 'Uncategorized')
-            subcategory = row.get('subcategory', '')
-            note = row.get('note', '')
-            amount = float(row.get('amount', 0))
-            
+            # Read & clean fields
+            category = row.get('category') or 'Uncategorized'
+            subcategory = row.get('subcategory') or ''
+            note = row.get('note') or ''
+            try:
+                amount = float(row.get('amount', 0))
+            except:
+                amount = 0.0  # if invalid
+
+            params = (session['user_id'],'Expense', category, subcategory, note, amount, 'csv')
             cursor.execute('''
-            INSERT INTO transactions (user_id, category, subcategory, note, amount, mode)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''', (session['user_id'], category, subcategory, note, amount, 'csv'))
-            
+            INSERT INTO transactions (user_id,type, category, subcategory, note, amount, mode)
+            VALUES (?, ?, ?, ?, ?, ?)''', params)
+
             count += 1
-        
+
         conn.commit()
         conn.close()
-        
-        return jsonify({'message': f'Successfully imported {count} transactions'})
-    
+
+        # ✅ Return preview: first 5 rows
+        preview = csv_reader[:5]
+
+        return jsonify({
+            'message': f'Successfully imported {count} transactions',
+            'preview': preview
+        })
+
     except Exception as e:
         return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
+
+
 
 @app.route('/upload_receipt', methods=['POST'])
 def upload_receipt():
@@ -237,7 +256,7 @@ def upload_receipt():
     cursor.execute('''
     INSERT INTO transactions (user_id, category, amount, mode)
     VALUES (?, ?, ?, ?)
-    ''', (session['user_id'], 'Receipt Upload', 0.00, 'receipt'))
+    ''', (..., now), (session['user_id'], 'Receipt Upload', 0.00, 'receipt'))
     
     conn.commit()
     conn.close()
@@ -251,12 +270,14 @@ def get_transactions():
     
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+    LIMIT = 20
+    OFFSET = request.args.get('offset', 0)
     transactions = cursor.execute('''
     SELECT * FROM transactions 
     WHERE user_id = ? 
     ORDER BY date DESC
-    ''', (session['user_id'],)).fetchall()
+    LIMIT ? OFFSET ?
+    ''', (session['user_id'], LIMIT, OFFSET)).fetchall()
     
     # Convert to list of dicts
     transaction_list = []
@@ -273,7 +294,7 @@ def get_transactions():
     
     # Simple budget advice (in a real app, this would be more sophisticated)
     total_spent = sum(txn['amount'] for txn in transaction_list)
-    budget_advice = "No transactions yet" if not transaction_list else f"Total spent: ${total_spent:.2f}"
+    budget_advice = "No transactions yet" if not transaction_list else f"Total spent: ₹{total_spent:.2f}"
     
     conn.close()
     
@@ -293,7 +314,7 @@ def get_budget_advice():
     transactions = cursor.execute('''
     SELECT category, SUM(amount) as total
     FROM transactions 
-    WHERE user_id = ?
+    WHERE user_id = ? AND type='Expense'
     GROUP BY category
     ORDER BY total DESC
     ''', (session['user_id'],)).fetchall()
@@ -308,7 +329,7 @@ def get_budget_advice():
     highest_category = transactions[0]['category']
     highest_amount = transactions[0]['total']
     
-    advice = f"Your highest spending category is '{highest_category}' at ${highest_amount:.2f}."
+    advice = f"Your highest spending category is '{highest_category}' at ₹{highest_amount:.2f}."
     
     if len(transactions) > 1:
         advice += f" Consider reducing spending in this category."

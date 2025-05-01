@@ -276,36 +276,62 @@ async function loadTransactions() {
 }
 
 // Function to upload CSV file
-function uploadCSV() {
-    const fileInput = document.getElementById("csv-file");
-    
-    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
-        alert("Please select a CSV file to upload");
+
+async function uploadCSV() {
+    const fileInput = document.getElementById('csv-file');
+    const file = fileInput.files[0];
+
+    if (!file) {
+        alert('Please select a CSV file.');
         return;
     }
-    
+
     const formData = new FormData();
-    formData.append("file", fileInput.files[0]);
-    
-    fetch("/upload_csv", {
-        method: "POST",
+    formData.append('file', file);
+
+    const response = await fetch('/upload_csv', {
+        method: 'POST',
         body: formData
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error("Server returned an error");
-        }
-        return response.json();
-    })
-    .then(data => {
-        alert(data.message);
-        loadTransactions();
-        fileInput.value = "";
-    })
-    .catch(error => {
-        alert("Error uploading CSV: " + (error.message || "Unknown error"));
-        console.error(error);
     });
+
+    const data = await response.json();
+
+    // Show upload status
+    const statusDiv = document.getElementById('uploadStatus');
+    if (response.ok) {
+        statusDiv.textContent = data.message;
+    } else {
+        statusDiv.textContent = data.error;
+        return;
+    }
+
+    // ✅ Show uploaded file name
+    document.getElementById('previewBox').innerHTML = `<p>Uploaded File: <strong>${file.name}</strong></p>`;
+
+    // ✅ Show preview table (first 5 rows)
+    if (data.preview && data.preview.length > 0) {
+        let tableHTML = '<table border="1" cellpadding="5" cellspacing="0"><tr>';
+        
+        // Table headers
+        Object.keys(data.preview[0]).forEach(key => {
+            tableHTML += `<th>${key}</th>`;
+        });
+        tableHTML += '</tr>';
+
+        // Table rows
+        data.preview.forEach(row => {
+            tableHTML += '<tr>';
+            Object.values(row).forEach(val => {
+                tableHTML += `<td>${val}</td>`;
+            });
+            tableHTML += '</tr>';
+        });
+        tableHTML += '</table>';
+
+        document.getElementById('previewBox').innerHTML += tableHTML;
+    } else {
+        document.getElementById('previewBox').innerHTML += '<p>No data found in CSV.</p>';
+    }
 }
 
 // Function to upload receipt
