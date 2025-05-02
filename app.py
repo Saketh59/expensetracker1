@@ -153,10 +153,15 @@ def add_transaction():
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    txn_type = request.form.get('type', 'Expense').title()
+    if txn_type not in ['Income', 'Expense']:
+        txn_type = 'Expense'
+
     cursor.execute('''
-    INSERT INTO transactions (user_id,type, category, subcategory, note, amount)
-    VALUES (?, ?, ?, ?, ?)
-    ''',(..., now), (session['user_id'],'Expense', category, subcategory, note, amount))
+    INSERT INTO transactions (user_id, type, category, subcategory, note, amount)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (session['user_id'], txn_type, category, subcategory, note, amount))
+
     
     conn.commit()
     conn.close()
@@ -193,6 +198,9 @@ def upload_csv():
         count = 0
         for row in csv_reader:
             # Read & clean fields
+            txn_type = row.get('type', 'Expense').title() 
+            if txn_type not in ['Income', 'Expense']:
+                txn_type = 'Expense' 
             category = row.get('category') or 'Uncategorized'
             subcategory = row.get('subcategory') or ''
             note = row.get('note') or ''
@@ -201,10 +209,10 @@ def upload_csv():
             except:
                 amount = 0.0  # if invalid
 
-            params = (session['user_id'],'Expense', category, subcategory, note, amount, 'csv')
+            params = (session['user_id'],txn_type, category, subcategory, note, amount, 'csv')
             cursor.execute('''
             INSERT INTO transactions (user_id,type, category, subcategory, note, amount, mode)
-            VALUES (?, ?, ?, ?, ?, ?)''', params)
+            VALUES (?, ?, ?, ?, ?, ?,?)''', params)
 
             count += 1
 
@@ -284,6 +292,7 @@ def get_transactions():
     for txn in transactions:
         transaction_list.append({
             'id': txn['id'],
+            'type': txn['type'],
             'category': txn['category'],
             'subcategory': txn['subcategory'],
             'note': txn['note'],
@@ -292,9 +301,20 @@ def get_transactions():
             'date': txn['date']
         })
     
-    # Simple budget advice (in a real app, this would be more sophisticated)
-    total_spent = sum(txn['amount'] for txn in transaction_list)
-    budget_advice = "No transactions yet" if not transaction_list else f"Total spent: ₹{total_spent:.2f}"
+    income_total = 0.0
+    expense_total = 0.0
+    for txn in transaction_list:
+        txn_type = txn.get('type', 'Expense')
+        if txn_type == 'Income':
+            income_total += txn['amount']
+        else:
+            expense_total += txn['amount']
+
+    net_savings = income_total - expense_total
+    budget_advice = (
+        f"Total Income: ₹{income_total:.2f}, Total Expenses: ₹{expense_total:.2f}, Net Savings: ₹{net_savings:.2f}"
+    )
+
     
     conn.close()
     
@@ -326,6 +346,7 @@ def get_budget_advice():
     
     # Generate simple advice based on spending patterns
     # In a real app, this would be more sophisticated
+
     highest_category = transactions[0]['category']
     highest_amount = transactions[0]['total']
     
