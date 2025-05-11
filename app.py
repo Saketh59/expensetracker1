@@ -1,14 +1,18 @@
 # app.py
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 import sqlite3
+import pandas as pd
 import os
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import csv
 import io
-from datetime import datetime
-now = datetime.utcnow().isoformat()
+from datetime import datetime,timezone
+from collections import defaultdict
+# now = datetime.utcnow().isoformat()
+now = datetime.now(timezone.utc).isoformat()
+
 
 # Optionally you'd use a library for OCR functionality
 # import pytesseract
@@ -103,6 +107,11 @@ def login():
     if not data or not data.get('email') or not data.get('password'):
         return jsonify({'error': 'Missing required fields'}), 400
     
+    # Basic password strength check
+    if len(data.get('password')) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters long'}), 400
+
+    
     email = data.get('email')
     password = data.get('password')
     
@@ -168,11 +177,57 @@ def add_transaction():
     
     return jsonify({'message': 'Transaction added successfully'})
 
+# @app.route('/upload_csv', methods=['POST'])
+# def upload_csv():
+#     print("CSV upload route triggered")  # Debugging line
+    
+#     if 'file' not in request.files:
+#         return jsonify({"error": "No file part"}), 400
+
+#     file = request.files['file']
+
+#     if file.filename == '':
+#         return jsonify({"error": "No selected file"}), 400
+#     print(f"Received file: {file.filename}")  # Debugging line
+
+#     try:
+#         df = pd.read_csv(file)
+#         print("CSV Columns:", df.columns.tolist())  # Debugging line
+
+#         category_col = None
+#         for col in df.columns:
+#             if col.strip().lower() == 'category':
+#                 category_col = col
+#                 break
+
+#         if not category_col:
+#             return jsonify({"error": "CSV must have a 'Category' column"}), 400
+
+#         if 'amount' not in df.columns:
+#             return jsonify({"error": "CSV must have an 'Amount' column"}), 400
+
+#         preview_rows = []
+#         for category, group in df.groupby(category_col):
+#             sample_rows = group.head(3).to_dict(orient='records')
+#             preview_rows.extend(sample_rows)
+
+#         return jsonify({
+#             "message": f"Successfully imported {len(df)} transactions",
+#             "preview": preview_rows
+#         })
+
+#     except pd.errors.ParserError:
+#         return jsonify({"error": "Error parsing CSV file"}), 400
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+
+
 @app.route('/upload_csv', methods=['POST'])
 def upload_csv():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
-
+    
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
 
@@ -187,49 +242,97 @@ def upload_csv():
     try:
         # Read CSV
         stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
-        csv_reader = list(csv.DictReader(stream))
+        csv_reader = csv.DictReader(stream)
+        rows = list(csv_reader)
 
-        if not csv_reader:
+        if not rows:
             return jsonify({'error': 'CSV is empty or invalid format'}), 400
+
+        # Print out headers to debug
+        headers = list(rows[0].keys())
+        
+        # Check for required columns
+        required_columns = ['category', 'amount']
+        missing_columns = [col for col in required_columns if col.lower() not in [h.lower() for h in headers]]
+        
+        if missing_columns:
+            return jsonify({'error': f'CSV missing required columns: {", ".join(missing_columns)}'}), 400
+
+        # Map column names to standardized names (case-insensitive)
+        column_mapping = {}
+        for header in headers:
+            lower_header = header.lower().strip()
+            if lower_header == 'category':
+                column_mapping['category'] = header
+            elif lower_header == 'amount':
+                column_mapping['amount'] = header
+            elif lower_header == 'type':
+                column_mapping['type'] = header
+            elif lower_header == 'subcategory':
+                column_mapping['subcategory'] = header
+            elif lower_header == 'note':
+                column_mapping['note'] = header
 
         conn = get_db_connection()
         cursor = conn.cursor()
 
         count = 0
-        for row in csv_reader:
-            # Read & clean fields
-            txn_type = row.get('type', 'Expense').title() 
-            if txn_type not in ['Income', 'Expense']:
-                txn_type = 'Expense' 
-            category = row.get('category') or 'Uncategorized'
-            subcategory = row.get('subcategory') or ''
-            note = row.get('note') or ''
+        # Group rows by category for preview
+        category_samples = defaultdict(list)
+        
+        for row in rows:
+            # Extract data using the mapped column names
+            category = row.get(column_mapping.get('category')) or 'Uncategorized'
+            
+            # Store sample for preview (max 3 per category)
+            if len(category_samples[category]) < 3:
+                category_samples[category].append(row)
+            
+            # Process transaction for database
+            txn_type = 'Expense'
+            if 'type' in column_mapping:
+                txn_type = row.get(column_mapping.get('type'), 'Expense').title()
+                if txn_type not in ['Income', 'Expense']:
+                    txn_type = 'Expense'
+            
+            subcategory = ''
+            if 'subcategory' in column_mapping:
+                subcategory = row.get(column_mapping.get('subcategory')) or ''
+                
+            note = ''
+            if 'note' in column_mapping:
+                note = row.get(column_mapping.get('note')) or ''
+                
             try:
-                amount = float(row.get('amount', 0))
-            except:
-                amount = 0.0  # if invalid
+                amount = float(row.get(column_mapping.get('amount'), 0))
+            except (ValueError, TypeError):
+                amount = 0.0
 
-            params = (session['user_id'],txn_type, category, subcategory, note, amount, 'csv')
             cursor.execute('''
-            INSERT INTO transactions (user_id,type, category, subcategory, note, amount, mode)
-            VALUES (?, ?, ?, ?, ?, ?,?)''', params)
-
+            INSERT INTO transactions (user_id, type, category, subcategory, note, amount, mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?)''', (
+                session['user_id'], txn_type, category, subcategory, note, amount, 'csv'
+            ))
             count += 1
 
         conn.commit()
         conn.close()
 
-        # ✅ Return preview: first 5 rows
-        preview = csv_reader[:5]
+        # Prepare preview data - list format for easier frontend display
+        preview_data = []
+        for category, rows in category_samples.items():
+            for row in rows:
+                preview_data.append(row)
 
         return jsonify({
             'message': f'Successfully imported {count} transactions',
-            'preview': preview
+            'headers': headers,
+            'preview': preview_data
         })
 
     except Exception as e:
+        print(f"CSV Upload Error: {str(e)}")  # Server-side logging
         return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
-
 
 
 @app.route('/upload_receipt', methods=['POST'])
@@ -264,7 +367,7 @@ def upload_receipt():
     cursor.execute('''
     INSERT INTO transactions (user_id, category, amount, mode)
     VALUES (?, ?, ?, ?)
-    ''', (..., now), (session['user_id'], 'Receipt Upload', 0.00, 'receipt'))
+    ''', (session['user_id'], 'Receipt Upload', 0.00, 'receipt'))
     
     conn.commit()
     conn.close()
@@ -279,7 +382,7 @@ def get_transactions():
     conn = get_db_connection()
     cursor = conn.cursor()
     LIMIT = 20
-    OFFSET = request.args.get('offset', 0)
+    OFFSET = int(request.args.get('offset', 0))
     transactions = cursor.execute('''
     SELECT * FROM transactions 
     WHERE user_id = ? 

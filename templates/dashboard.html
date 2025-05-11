@@ -9,8 +9,7 @@
 <body>
     <button  id="logout-btn" onclick="logout()">Logout</button>
     <div id="dashboard-container">
-        <h2>Welcome, <span id="username"></span>!</h2>
-        
+        <h1>Welcome, <span id="user-name-display"></span>!</h1>
         <h3>Manual Expense Entry</h3>
         <form id="manual-entry-form">
             <input type="text" id="category" placeholder="Category" required>
@@ -20,10 +19,18 @@
         </form>
         
         <h3>Upload CSV</h3>
-        <input type="file" id="csv-file" accept=".csv">
-        <button onclick="uploadCSV()">Upload CSV</button>
-        <div id="uploadStatus" style="margin-top: 10px; font-weight: bold;"></div>
-        <div id="previewBox" style="margin-top: 20px;"></div>
+        <!--<form action="/upload_csv" method="POST" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".csv" required>
+            <button type="submit">Upload</button>
+        </form>-->
+        <form id="csv-upload-form">
+    <input type="file" id="csv-file" accept=".csv" />
+    <button type="submit">Upload CSV</button>
+     </form>
+
+    <div id="uploadStatus"></div>
+    <div id="previewBox"></div>
+
         
         <h3>Upload Receipt (OCR)</h3>
         <input type="file" id="receipt-file" accept="image/*">
