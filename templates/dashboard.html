@@ -19,34 +19,35 @@
                 <h5>Manual Transaction Entry</h5>
             </div>
             <div class="card-body">
-                <form id="manual-entry-form">
-                    <div class="row mb-3">
-                        <div class="col">
-                            <select id="type" class="form-select" required>
-                                <option value="" disabled selected>Select Type</option>
-                                <option value="Income">Income</option>
-                                <option value="Expense">Expense</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div id="category-group" class="row mb-3">
-                        <div class="col">
-                            <input type="text" class="form-control" id="category" placeholder="Category" required>
-                        </div>
-                        <div id="subcategory-group" class="col">
-                            <input type="text" class="form-control" id="subcategory" placeholder="Subcategory">
-                        </div>
-                    </div>
-                    <div class="row mb-3">
-                        <div class="col">
-                            <input type="number" class="form-control" id="amount" placeholder="Amount" required>
-                        </div>
-                        <div class="col">
-                            <input type="text" class="form-control" id="note" placeholder="Note">
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-success">Add Transaction</button>
-                </form>
+     <form id="manual-entry-form">
+    <div class="row mb-3">
+        <div class="col">
+            <select id="type" name="type" class="form-select" required>
+                <option value="" disabled selected>Select Type</option>
+                <option value="Income">Income</option>
+                <option value="Expense">Expense</option>
+            </select>
+        </div>
+    </div>
+    <div id="category-group" class="row mb-3">
+        <div class="col">
+            <input type="text" class="form-control" id="category" name="category" placeholder="Category" required>
+        </div>
+        <div id="subcategory-group" class="col">
+            <input type="text" class="form-control" id="subcategory" name="subcategory" placeholder="Subcategory">
+        </div>
+    </div>
+    <div class="row mb-3">
+        <div class="col">
+            <input type="number" class="form-control" id="amount" name="amount" placeholder="Amount" required>
+        </div>
+        <div class="col">
+            <input type="text" class="form-control" id="note" name="note" placeholder="Note">
+        </div>
+    </div>
+    <button type="submit" class="btn btn-success">Add Transaction</button>
+</form>
+
             </div>
         </div>
         
