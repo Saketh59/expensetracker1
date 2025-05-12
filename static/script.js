@@ -251,7 +251,6 @@
 
 //             transactionsContainer.appendChild(fragment);
 //         } else {
-//             console.error("Failed to load transactions");
 //             transactionsContainer.innerHTML = "<h3>Recent Transactions</h3><p>Error loading transactions</p>";
 //         }
 //     } catch (error) {
@@ -882,30 +881,40 @@
 // Prevent Flash of Unstyled Content (FOUC)
 document.documentElement.classList.add('js-loading');
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener('DOMContentLoaded', () => {
     // Remove loading class after everything is fully loaded
     window.addEventListener('load', () => {
         setTimeout(() => {
             document.documentElement.classList.remove('js-loading');
-        }, 100); // Small delay to ensure everything is ready
+        }, 100);
     });
 
     // Auth form handling
     const form = document.getElementById("auth-form");
-
-    // Check if we're on the login/signup page
     if (form) {
         handleAuthForm(form);
     }
 
     const isDashboardPage = document.getElementById("dashboard-container") !== null;
-
     if (isDashboardPage) {
         loadUserInfo();
         setTimeout(() => {
-            loadTransactions();
-            getBudgetAdvice();
+            updateDashboard();
         }, 100);
+
+        // Add type selection change handler
+        const typeSelect = document.getElementById('type');
+        if (typeSelect) {
+            typeSelect.addEventListener('change', handleTypeChange);
+            // Initial call to set correct fields
+            handleTypeChange();
+        }
+
+        // Manual transaction entry form
+        const manualEntryForm = document.getElementById("manual-entry-form");
+        if (manualEntryForm) {
+            manualEntryForm.addEventListener("submit", handleManualEntry);
+        }
     }
 
     // CSV file selection event listener
@@ -915,7 +924,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const fileName = e.target.files[0] ? e.target.files[0].name : 'No file selected';
             document.getElementById('selectedFileName').textContent = fileName;
             
-            // Show preview when a file is selected
             if (e.target.files[0]) {
                 previewCSV(e.target.files[0]);
             }
@@ -926,12 +934,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const uploadCSVBtn = document.getElementById('uploadCSVBtn');
     if (uploadCSVBtn) {
         uploadCSVBtn.addEventListener('click', handleCSVUpload);
-    }
-
-    // Manual transaction entry form
-    const manualEntryForm = document.getElementById("manual-entry-form");
-    if (manualEntryForm) {
-        manualEntryForm.addEventListener("submit", handleManualEntry);
     }
 });
 
@@ -1113,7 +1115,7 @@ function displayCSVPreview(results) {
 }
 
 // Function to handle the CSV upload
-function handleCSVUpload() {
+async function handleCSVUpload() {
     const fileInput = document.getElementById('csvFile');
     const file = fileInput.files[0];
     
@@ -1122,46 +1124,93 @@ function handleCSVUpload() {
         return;
     }
     
-    // Create FormData object
+    if (!file.name.endsWith('.csv')) {
+        showUploadStatus('Please upload a CSV file', 'error');
+        return;
+    }
+    
     const formData = new FormData();
     formData.append('file', file);
     
-    // Show loading status
-    showUploadStatus('Uploading and processing...', 'info');
-    
-    // Send the file to the server
-    fetch('/upload_csv', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
-    .then(data => {
-        if (data.success) {
-            showUploadStatus(`Successfully imported ${data.count || ''} transactions!`, 'success');
-            // Refresh the transactions table
-            loadTransactions();
-            // Update budget advice
-            getBudgetAdvice();
+    try {
+        showUploadStatus('Uploading and processing...', 'info');
+        
+        const response = await fetch('/upload_csv', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showUploadStatus(result.message, 'success');
             
-            // Display imported transactions if available
-            if (data.transactions && data.transactions.length > 0) {
-                displayImportedTransactions(data.transactions);
+            // Display category-wise transactions
+            const previewContainer = document.getElementById('csvPreviewContainer');
+            if (previewContainer && result.category_transactions) {
+                let previewHTML = '<div class="category-transactions">';
+                
+                for (const [category, transactions] of Object.entries(result.category_transactions)) {
+                    previewHTML += `
+                        <div class="category-section">
+                            <h4>${category}</h4>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>Type</th>
+                                            <th>Amount</th>
+                                            <th>Date</th>
+                                            <th>Note</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                    `;
+                    
+                    transactions.forEach(txn => {
+                        const amountClass = txn.type.toLowerCase() === 'income' ? 'income' : 'expense';
+                        const amountSign = txn.type.toLowerCase() === 'income' ? '+' : '-';
+                        previewHTML += `
+                            <tr>
+                                <td>${txn.type}</td>
+                                <td class="${amountClass}">${amountSign}₹${txn.amount.toFixed(2)}</td>
+                                <td>${formatDate(txn.date)}</td>
+                                <td>${txn.note || ''}</td>
+                            </tr>
+                        `;
+                    });
+                    
+                    previewHTML += `
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                previewHTML += '</div>';
+                previewContainer.innerHTML = previewHTML;
+                previewContainer.style.display = 'block';
             }
             
-            // Reset file input
+            // Update the entire dashboard
+            await updateDashboard();
+            
+            // Clear the file input
             fileInput.value = '';
+            
+            // Clear the selected file name display
+            const selectedFileName = document.getElementById('selectedFileName');
+            if (selectedFileName) {
+                selectedFileName.textContent = 'No file selected';
+            }
         } else {
-            showUploadStatus(`Error: ${data.message || 'Unknown error'}`, 'danger');
+            showUploadStatus(result.error || 'Upload failed', 'error');
         }
-    })
-    .catch(error => {
-        showUploadStatus(`Upload failed: ${error.message}`, 'danger');
-    });
+    } catch (error) {
+        console.error('Upload error:', error);
+        showUploadStatus('Upload failed: ' + error.message, 'error');
+    }
 }
 
 // Function to show upload status with appropriate styling
@@ -1185,45 +1234,82 @@ function showUploadStatus(message, type) {
 async function handleManualEntry(e) {
     e.preventDefault();
     
-    const formData = {
-        type: document.getElementById('type').value || 'Expense',
-        category: document.getElementById('category').value,
-        subcategory: document.getElementById('subcategory').value,
-        amount: document.getElementById('amount').value,
-        note: document.getElementById('note')?.value || ''
-    };
+    const type = document.getElementById('type').value;
+    const amount = document.getElementById('amount').value;
+    const note = document.getElementById('note')?.value || '';
     
-    if (!formData.category || !formData.amount) {
+    if (!type || !amount) {
         showUploadStatus('Please fill in all required fields', 'warning');
         return;
     }
     
-    fetch('/api/transactions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
+    const formData = new FormData();
+    formData.append('type', type);
+    formData.append('amount', amount);
+    formData.append('note', note);
+    
+    // For income transactions, use default category
+    if (type === 'Income') {
+        formData.append('category', 'Income');
+        formData.append('subcategory', '');
+        formData.append('mode', 'Cash');
+    } else {
+        // For expenses, require category
+        const category = document.getElementById('category').value;
+        const subcategory = document.getElementById('subcategory').value;
+        
+        if (!category) {
+            showUploadStatus('Please enter a category for expense', 'warning');
+            return;
+        }
+        
+        formData.append('category', category);
+        formData.append('subcategory', subcategory);
+        formData.append('mode', 'Cash');
+    }
+    
+    try {
+        // Log the transaction data being sent
+        const transactionData = {
+            type: type,
+            amount: amount,
+            note: note,
+            category: type === 'Income' ? 'Income' : document.getElementById('category').value,
+            mode: 'Cash'
+        };
+        console.log('Sending transaction data:', transactionData);
+
+        const response = await fetch('/add_transaction', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        console.log('Server response:', data);
+        
+        if (response.ok) {
             // Clear the form
             document.getElementById('manual-entry-form').reset();
             
-            // Refresh transactions and show success message
-            loadTransactions();
-            showUploadStatus('Transaction added successfully!', 'success');
+            // Update the entire dashboard
+            await updateDashboard();
             
-            // Update budget advice
+            // Show success message with updated totals
+            let message = 'Transaction added successfully!';
+            if (data.totals) {
+                message += `\nCurrent Totals:\nIncome: ₹${data.totals.income.toFixed(2)}\nExpenses: ₹${data.totals.expenses.toFixed(2)}\nNet Savings: ₹${data.totals.savings.toFixed(2)}`;
+            }
+            showUploadStatus(message, 'success');
+            
+            // Update budget advice immediately
             getBudgetAdvice();
         } else {
-            showUploadStatus(`Error: ${data.message}`, 'danger');
+            showUploadStatus(`Error: ${data.error || 'Failed to add transaction'}`, 'danger');
         }
-    })
-    .catch(error => {
-        showUploadStatus(`Error: ${error.message}`, 'danger');
-    });
+    } catch (error) {
+        console.error('Error adding transaction:', error);
+        showUploadStatus('Error: Failed to add transaction. Please try again.', 'danger');
+    }
 }
 
 // Function to display imported transactions
@@ -1263,8 +1349,8 @@ function displayImportedTransactions(transactions) {
         
         // Format the amount with appropriate sign
         const formattedAmount = txn.type.toLowerCase() === 'income' 
-            ? `+$${parseFloat(txn.amount).toFixed(2)}`
-            : `-$${parseFloat(txn.amount).toFixed(2)}`;
+            ? `+₹${parseFloat(txn.amount).toFixed(2)}`
+            : `-₹${parseFloat(txn.amount).toFixed(2)}`;
         
         // Set row HTML
         newRow.innerHTML = `
@@ -1290,7 +1376,7 @@ function displayImportedTransactions(transactions) {
 // Load user info
 async function loadUserInfo() {
     try {
-        const response = await fetch("/api/user_info");
+        const response = await fetch("/user_info");
 
         if (response.ok) {
             const data = await response.json();
@@ -1309,73 +1395,69 @@ async function loadUserInfo() {
 }
 
 // Function to load transactions from the server
-function loadTransactions() {
-    const tableBody = document.querySelector('#transactionsTable tbody');
-    if (!tableBody) return;
-    
-    tableBody.innerHTML = `
-        <tr id="loadingRow">
-            <td colspan="6" class="text-center">
-                <div class="spinner-border spinner-border-sm" role="status">
-                    <span class="visually-hidden">Loading...</span>
-                </div>
-                Loading transactions...
-            </td>
-        </tr>
-    `;
-    
-    fetch('/api/transactions')
-    .then(response => response.json())
-    .then(data => {
-        tableBody.innerHTML = ''; // Clear existing rows
-        
-        if (data.length === 0) {
-            // Show a message if no transactions
-            const noDataRow = document.createElement('tr');
-            noDataRow.innerHTML = '<td colspan="6" class="text-center">No transactions found. Add some or import from CSV.</td>';
-            tableBody.appendChild(noDataRow);
-        } else {
-            // Add each transaction to the table
-            data.forEach(transaction => {
-                const row = document.createElement('tr');
-                
-                // Apply the appropriate class based on transaction type
-                const amountClass = transaction.type.toLowerCase() === 'income' ? 'income' : 'expense';
-                
-                // Format the amount with appropriate sign
-                const formattedAmount = transaction.type.toLowerCase() === 'income' 
-                    ? `+$${parseFloat(transaction.amount).toFixed(2)}`
-                    : `-$${parseFloat(transaction.amount).toFixed(2)}`;
-                
-                // Format the date
-                const formattedDate = new Date(transaction.date).toLocaleDateString();
-                
-                row.innerHTML = `
-                    <td>${transaction.type}</td>
-                    <td>${transaction.category}</td>
-                    <td>${transaction.subcategory || ''}</td>
-                    <td>${transaction.note || ''}</td>
-                    <td class="${amountClass}">${formattedAmount}</td>
-                    <td>${formattedDate}</td>
-                `;
-                
-                tableBody.appendChild(row);
+async function loadTransactions() {
+    const transactionsContainer = document.getElementById("transactions");
+    if (!transactionsContainer) return;
+
+    try {
+        transactionsContainer.innerHTML = "<h3>Recent Transactions</h3><p>Loading transactions...</p>";
+
+        const response = await fetch("/get_transactions");
+
+        if (response.ok) {
+            const data = await response.json();
+
+            transactionsContainer.innerHTML = "<h3>Recent Transactions</h3>";
+
+            if (!data.transactions || data.transactions.length === 0) {
+                transactionsContainer.innerHTML += "<p>No transactions yet</p>";
+                return;
+            }
+
+            const fragment = document.createDocumentFragment();
+
+            data.transactions.forEach(txn => {
+                const txnDiv = document.createElement("div");
+                txnDiv.classList.add("transaction-entry");
+
+                let content = `<strong>${txn.category}</strong>: $${parseFloat(txn.amount).toFixed(2)}`;
+
+                if (txn.subcategory) {
+                    content += ` (${txn.subcategory})`;
+                }
+
+                content += ` - ${formatDate(txn.date)}`;
+
+                if (txn.note) {
+                    content += `<br><em>${txn.note}</em>`;
+                }
+
+                txnDiv.innerHTML = content;
+                fragment.appendChild(txnDiv);
             });
+
+            transactionsContainer.appendChild(fragment);
+
+            // Update budget advice if included in the response
+            if (data.budget_advice) {
+                const budgetAdviceContainer = document.getElementById('budget-advice');
+                const adviceOutput = document.getElementById('advice-output');
+                const formattedAdvice = data.budget_advice.replace(/\n/g, '<br>');
+                
+                if (budgetAdviceContainer) {
+                    budgetAdviceContainer.innerHTML = formattedAdvice;
+                }
+                if (adviceOutput) {
+                    adviceOutput.innerHTML = formattedAdvice;
+                }
+            }
+        } else {
+            transactionsContainer.innerHTML = "<h3>Recent Transactions</h3><p>Error loading transactions</p>";
         }
-        
-        // Update transaction stats if needed
-        updateTransactionStats();
-    })
-    .catch(error => {
-        console.error('Error loading transactions:', error);
-        tableBody.innerHTML = `
-            <tr>
-                <td colspan="6" class="text-center text-danger">
-                    Error loading transactions. Please try again.
-                </td>
-            </tr>
-        `;
-    });
+    } catch (error) {
+        console.error("Error loading transactions:", error);
+        transactionsContainer.innerHTML = "<h3>Recent Transactions</h3><p>Error loading transactions</p>";
+    }
 }
 
 // Function to upload a receipt image
@@ -1418,70 +1500,37 @@ function uploadReceipt() {
 }
 
 // Function to get budget advice
-function getBudgetAdvice() {
-    fetch('/api/budget_advice')
-    .then(response => response.json())
-    .then(data => {
-        const adviceElement = document.getElementById('budgetAdvice');
-        const adviceOutput = document.getElementById('advice-output');
+async function getBudgetAdvice() {
+    const adviceContainer = document.getElementById('budgetAdvice');
+    if (!adviceContainer) return;
+
+    adviceContainer.innerHTML = 'Loading advice...';
+    
+    try {
+        const response = await fetch('/get_budget_advice');
+        if (!response.ok) {
+            throw new Error('Failed to fetch budget advice');
+        }
         
-        if (!adviceElement && !adviceOutput) return;
+        const data = await response.json();
         
         if (data.advice) {
-            if (adviceElement) {
-                adviceElement.innerHTML = data.advice;
-                adviceElement.style.display = 'block';
-            }
-            
-            // Also update the advice output if it exists
-            if (adviceOutput) {
-                adviceOutput.textContent = data.advice;
-            }
+            // Replace newlines with <br> for proper display
+            const formattedAdvice = data.advice.replace(/\n/g, '<br>');
+            adviceContainer.innerHTML = formattedAdvice;
         } else {
-            if (adviceElement) {
-                adviceElement.innerHTML = 'No budget advice available. Please add more transactions.';
-                adviceElement.style.display = 'block';
-            }
-            
-            if (adviceOutput) {
-                adviceOutput.textContent = 'No advice available yet';
-            }
+            adviceContainer.innerHTML = 'No budget advice available. Please add more transactions.';
         }
-    })
-    .catch(error => {
+    } catch (error) {
         console.error('Error getting budget advice:', error);
-        const adviceOutput = document.getElementById('advice-output');
-        if (adviceOutput) {
-            adviceOutput.textContent = 'Error loading advice';
-        }
-    });
-}
-
-// Function to update transaction statistics
-function updateTransactionStats() {
-    // This function would update any counters, totals, or charts
-    // Implement based on your UI needs
-    console.log('Transaction stats updated');
+        adviceContainer.innerHTML = 'Error loading advice. Please try again.';
+    }
 }
 
 // Function to handle logout
 function logout() {
-    fetch('/logout', {
-        method: 'POST'
-    })
-    .then(response => {
-        if (response.ok) {
-            window.location.href = '/login';
-        } else {
-            // Fallback to simple redirect
-            window.location.href = '/logout';
-        }
-    })
-    .catch(error => {
-        console.error('Logout failed:', error);
-        // Fallback to simple redirect on error
-        window.location.href = '/logout';
-    });
+    // Simply redirect to logout endpoint which handles the session cleanup
+    window.location.href = '/logout';
 }
 
 // Format date helper function
@@ -1494,5 +1543,153 @@ function formatDate(dateString) {
     } catch (e) {
         console.error("Error formatting date:", e);
         return "Invalid date";
+    }
+}
+
+async function updateTransactionStats() {
+    try {
+        // Update spending insights
+        const insightsContainer = document.getElementById('spending-insights');
+        if (insightsContainer) {
+            const response = await fetch('/get_spending_insights');
+            if (response.ok) {
+                const data = await response.json();
+                if (data.insights && data.insights.length > 0) {
+                    insightsContainer.innerHTML = data.insights.map(insight => 
+                        `<div class="insight ${insight.type}">${insight.message}</div>`
+                    ).join('');
+                } else {
+                    insightsContainer.innerHTML = '<p>No spending insights available yet.</p>';
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error updating transaction stats:', error);
+    }
+}
+
+// Function to update the entire dashboard
+async function updateDashboard() {
+    try {
+        const response = await fetch("/get_transactions");
+        if (!response.ok) {
+            throw new Error('Failed to fetch transactions');
+        }
+
+        const data = await response.json();
+        
+        // Update transactions table
+        const tbody = document.querySelector('#transactionsTable tbody');
+        if (tbody) {
+            tbody.innerHTML = ''; // Clear existing transactions
+
+            if (!data.transactions || data.transactions.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="text-center">No transactions found</td>
+                    </tr>
+                `;
+            } else {
+                data.transactions.forEach(txn => {
+                    const row = document.createElement('tr');
+                    
+                    // Format the date
+                    let formattedDate = txn.date;
+                    try {
+                        const date = new Date(txn.date);
+                        formattedDate = date.toLocaleDateString();
+                    } catch (e) {
+                        console.log('Could not format date:', e);
+                    }
+                    
+                    // Apply the appropriate class based on transaction type
+                    const amountClass = txn.type === 'Income' ? 'income' : 'expense';
+                    
+                    // Format the amount with appropriate sign
+                    const formattedAmount = txn.type === 'Income' 
+                        ? `+₹${parseFloat(txn.amount).toFixed(2)}`
+                        : `-₹${parseFloat(txn.amount).toFixed(2)}`;
+                    
+                    row.innerHTML = `
+                        <td>${txn.type}</td>
+                        <td>${txn.category}</td>
+                        <td>${txn.subcategory || ''}</td>
+                        <td>${txn.note || ''}</td>
+                        <td class="${amountClass}">${formattedAmount}</td>
+                        <td>${formattedDate}</td>
+                    `;
+                    
+                    tbody.appendChild(row);
+                });
+            }
+        }
+
+        // Update budget advice
+        if (data.budget_advice) {
+            const budgetAdviceContainer = document.getElementById('budgetAdvice');
+            if (budgetAdviceContainer) {
+                const formattedAdvice = data.budget_advice.replace(/\n/g, '<br>');
+                budgetAdviceContainer.innerHTML = formattedAdvice;
+                budgetAdviceContainer.style.display = 'block';
+            }
+        }
+
+        // Update spending insights
+        const insightsContainer = document.getElementById('spending-insights');
+        if (insightsContainer) {
+            const insightsResponse = await fetch('/get_spending_insights');
+            if (insightsResponse.ok) {
+                const insightsData = await insightsResponse.json();
+                if (insightsData.insights && insightsData.insights.length > 0) {
+                    insightsContainer.innerHTML = insightsData.insights.map(insight => 
+                        `<div class="insight ${insight.type}">${insight.message}</div>`
+                    ).join('');
+                } else {
+                    insightsContainer.innerHTML = '<p>No spending insights available yet.</p>';
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error updating dashboard:', error);
+    }
+}
+// Function to handle type selection change
+function handleTypeChange() {
+    const typeSelect = document.getElementById('type');
+    const categoryGroup = document.getElementById('category-group');
+    const subcategoryGroup = document.getElementById('subcategory-group');
+    
+    if (!typeSelect || !categoryGroup || !subcategoryGroup) return;
+    
+    if (typeSelect.value === 'Income') {
+        categoryGroup.style.display = 'none';
+        subcategoryGroup.style.display = 'none';
+    } else {
+        categoryGroup.style.display = 'block';
+        subcategoryGroup.style.display = 'block';
+    }
+}
+
+async function getSpendingInsights() {
+    const insightsContainer = document.getElementById('spending-insights');
+    if (!insightsContainer) return;
+
+    insightsContainer.innerHTML = 'Loading insights...';
+
+    try {
+        const response = await fetch('/get_spending_insights');
+        if (!response.ok) {
+            throw new Error('Failed to fetch spending insights');
+        }
+        const data = await response.json();
+        if (data.insights && data.insights.length > 0) {
+            insightsContainer.innerHTML = data.insights.map(insight =>
+                `<div class="insight ${insight.type}">${insight.message}</div>`
+            ).join('');
+        } else {
+            insightsContainer.innerHTML = '<p>No spending insights available yet.</p>';
+        }
+    } catch (error) {
+        insightsContainer.innerHTML = 'Error loading insights. Please try again.';
     }
 }

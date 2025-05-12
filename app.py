@@ -1,544 +1,3 @@
-# # app.py
-# from flask import Flask, render_template, request, jsonify, session, redirect, url_for
-# import sqlite3
-# import pandas as pd
-# import os
-# import json
-# from werkzeug.security import generate_password_hash, check_password_hash
-# from werkzeug.utils import secure_filename
-# import csv
-# import io
-# from datetime import datetime,timezone
-# from collections import defaultdict
-# # now = datetime.utcnow().isoformat()
-# now = datetime.now(timezone.utc).isoformat()
-
-
-# # Optionally you'd use a library for OCR functionality
-# # import pytesseract
-# # from PIL import Image
-
-# app = Flask(__name__,static_folder='static', template_folder='templates')
-# app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret')
-
-# # Database setup
-# def get_db_connection():
-#     conn = sqlite3.connect('finance_tracker.db')
-#     conn.row_factory = sqlite3.Row
-#     conn.execute('PRAGMA foreign_keys = ON')
-#     return conn
-
-# def init_db():
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-    
-#     cursor.execute('''
-#     CREATE TABLE IF NOT EXISTS users (
-#         id INTEGER PRIMARY KEY AUTOINCREMENT,
-#         username TEXT UNIQUE NOT NULL,
-#         email TEXT UNIQUE NOT NULL,
-#         password TEXT NOT NULL
-#     )
-#     ''')
-    
-#     cursor.execute('''
-#     CREATE TABLE IF NOT EXISTS transactions (
-#         id INTEGER PRIMARY KEY AUTOINCREMENT,
-#         user_id INTEGER NOT NULL,
-#         type TEXT NOT NULL CHECK(type IN ('Income', 'Expense')),
-#         category TEXT NOT NULL,
-#         subcategory TEXT,
-#         note TEXT,
-#         amount REAL NOT NULL,
-#         mode TEXT DEFAULT 'manual',
-#         date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-#         FOREIGN KEY (user_id) REFERENCES users (id)
-#     )
-#     ''')
-    
-#     conn.commit()
-#     conn.close()
-
-# # Initialize database
-# init_db()
-
-# # Routes
-# @app.route('/')
-# def index():
-#     if 'user_id' in session:
-#         return redirect(url_for('dashboard'))
-#     return render_template('index.html')
-
-# @app.route('/dashboard')
-# def dashboard():
-#     if 'user_id' not in session:
-#         return redirect(url_for('index'))
-#     return render_template('dashboard.html')
-
-# @app.route('/signup', methods=['POST'])
-# def signup():
-#     data = request.json
-    
-#     # Validate data
-#     if not data or not data.get('username') or not data.get('email') or not data.get('password'):
-#         return jsonify({'error': 'Missing required fields'}), 400
-    
-#     username = data.get('username')
-#     email = data.get('email')
-#     password = generate_password_hash(data.get('password'))
-    
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-    
-#     try:
-#         cursor.execute('INSERT INTO users (username, email, password) VALUES (?, ?, ?)', 
-#                       (username, email, password))
-#         conn.commit()
-#         return jsonify({'message': 'Signup successful!'}), 201
-#     except sqlite3.IntegrityError:
-#         return jsonify({'error': 'Username or email already exists'}), 400
-#     finally:
-#         conn.close()
-
-# @app.route('/login', methods=['POST'])
-# def login():
-#     data = request.json
-    
-#     if not data or not data.get('email') or not data.get('password'):
-#         return jsonify({'error': 'Missing required fields'}), 400
-    
-#     # Basic password strength check
-#     if len(data.get('password')) < 6:
-#         return jsonify({'error': 'Password must be at least 6 characters long'}), 400
-
-    
-#     email = data.get('email')
-#     password = data.get('password')
-    
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-    
-#     user = cursor.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
-#     conn.close()
-    
-#     if user and check_password_hash(user['password'], password):
-#         session['user_id'] = user['id']
-#         session['username'] = user['username']
-#         return jsonify({'message': 'Login successful!'}), 200
-    
-#     return jsonify({'error': 'Invalid email or password'}), 401
-
-# @app.route('/logout')
-# def logout():
-#     session.pop('user_id', None)
-#     session.pop('username', None)
-#     return redirect(url_for('index'))
-
-# @app.route('/user_info')
-# def user_info():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-    
-#     return jsonify({'username': session.get('username')})
-
-# @app.route('/add_transaction', methods=['POST'])
-# def add_transaction():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-    
-#     category = request.form.get('category')
-#     subcategory = request.form.get('subcategory', '')
-#     note = request.form.get('note', '')
-#     amount = request.form.get('amount')
-    
-#     if not category or not amount:
-#         return jsonify({'error': 'Missing required fields'}), 400
-    
-#     try:
-#         amount = float(amount)
-#     except ValueError:
-#         return jsonify({'error': 'Amount must be a number'}), 400
-    
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-    
-#     txn_type = request.form.get('type', 'Expense').title()
-#     if txn_type not in ['Income', 'Expense']:
-#         txn_type = 'Expense'
-
-#     cursor.execute('''
-#     INSERT INTO transactions (user_id, type, category, subcategory, note, amount)
-#     VALUES (?, ?, ?, ?, ?, ?)
-#     ''', (session['user_id'], txn_type, category, subcategory, note, amount))
-
-    
-#     conn.commit()
-#     conn.close()
-    
-#     return jsonify({'message': 'Transaction added successfully'})
-
-# # @app.route('/upload_csv', methods=['POST'])
-# # def upload_csv():
-# #     if 'user_id' not in session:
-# #         return jsonify({'error': 'Not logged in'}), 401
-    
-# #     if 'file' not in request.files:
-# #         return jsonify({'error': 'No file provided'}), 400
-
-# #     file = request.files['file']
-
-# #     if file.filename == '':
-# #         return jsonify({'error': 'No file selected'}), 400
-
-# #     if not file.filename.endswith('.csv'):
-# #         return jsonify({'error': 'File must be a CSV'}), 400
-
-# #     try:
-# #         # Read CSV
-# #         stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
-# #         csv_reader = csv.DictReader(stream)
-# #         rows = list(csv_reader)
-
-# #         if not rows:
-# #             return jsonify({'error': 'CSV is empty or invalid format'}), 400
-
-# #         # Print out headers to debug
-# #         headers = list(rows[0].keys())
-        
-# #         # Check for required columns
-# #         required_columns = ['category', 'amount']
-# #         missing_columns = [col for col in required_columns if col.lower() not in [h.lower() for h in headers]]
-        
-# #         if missing_columns:
-# #             return jsonify({'error': f'CSV missing required columns: {", ".join(missing_columns)}'}), 400
-
-# #         # Map column names to standardized names (case-insensitive)
-# #         column_mapping = {}
-# #         for header in headers:
-# #             lower_header = header.lower().strip()
-# #             if lower_header == 'category':
-# #                 column_mapping['category'] = header
-# #             elif lower_header == 'amount':
-# #                 column_mapping['amount'] = header
-# #             elif lower_header == 'type':
-# #                 column_mapping['type'] = header
-# #             elif lower_header == 'subcategory':
-# #                 column_mapping['subcategory'] = header
-# #             elif lower_header == 'note':
-# #                 column_mapping['note'] = header
-
-# #         conn = get_db_connection()
-# #         cursor = conn.cursor()
-
-# #         count = 0
-# #         # Group rows by category for preview
-# #         category_samples = defaultdict(list)
-        
-# #         for row in rows:
-# #             # Extract data using the mapped column names
-# #             category = row.get(column_mapping.get('category')) or 'Uncategorized'
-            
-# #             # Store sample for preview (max 3 per category)
-# #             if len(category_samples[category]) < 3:
-# #                 category_samples[category].append(row)
-            
-# #             # Process transaction for database
-# #             txn_type = 'Expense'
-# #             if 'type' in column_mapping:
-# #                 txn_type = row.get(column_mapping.get('type'), 'Expense').title()
-# #                 if txn_type not in ['Income', 'Expense']:
-# #                     txn_type = 'Expense'
-            
-# #             subcategory = ''
-# #             if 'subcategory' in column_mapping:
-# #                 subcategory = row.get(column_mapping.get('subcategory')) or ''
-                
-# #             note = ''
-# #             if 'note' in column_mapping:
-# #                 note = row.get(column_mapping.get('note')) or ''
-                
-# #             try:
-# #                 amount = float(row.get(column_mapping.get('amount'), 0))
-# #             except (ValueError, TypeError):
-# #                 amount = 0.0
-
-# #             cursor.execute('''
-# #             INSERT INTO transactions (user_id, type, category, subcategory, note, amount, mode)
-# #             VALUES (?, ?, ?, ?, ?, ?, ?)''', (
-# #                 session['user_id'], txn_type, category, subcategory, note, amount, 'csv'
-# #             ))
-# #             count += 1
-
-# #         conn.commit()
-# #         conn.close()
-
-# #         # Prepare preview data - list format for easier frontend display
-# #         preview_data = []
-# #         for category, rows in category_samples.items():
-# #             for row in rows:
-# #                 preview_data.append(row)
-
-# #         return jsonify({
-# #             'message': f'Successfully imported {count} transactions',
-# #             'headers': headers,
-# #             'preview': preview_data
-# #         })
-
-# #     except Exception as e:
-# #         print(f"CSV Upload Error: {str(e)}")  # Server-side logging
-# #         return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
-
-# @app.route('/upload_csv', methods=['POST'])
-# def upload_csv():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-    
-#     if 'file' not in request.files:
-#         return jsonify({'error': 'No file provided'}), 400
-
-#     file = request.files['file']
-
-#     if file.filename == '':
-#         return jsonify({'error': 'No file selected'}), 400
-
-#     if not file.filename.endswith('.csv'):
-#         return jsonify({'error': 'File must be a CSV'}), 400
-
-#     try:
-#         # Read CSV
-#         stream = io.StringIO(file.stream.read().decode("UTF8", errors='replace'), newline=None)
-#         csv_reader = csv.DictReader(stream)
-#         rows = list(csv_reader)
-
-#         if not rows:
-#             return jsonify({'error': 'CSV is empty or invalid format'}), 400
-
-#         # Get all headers and create a case-insensitive lookup dictionary
-#         original_headers = list(rows[0].keys())
-#         headers_lookup = {h.lower().strip(): h for h in original_headers}
-        
-#         # Check for required columns (case-insensitive)
-#         required_columns = ['category', 'amount']
-#         missing_columns = []
-        
-#         for required in required_columns:
-#             if required.lower() not in headers_lookup:
-#                 missing_columns.append(required)
-        
-#         if missing_columns:
-#             return jsonify({'error': f'CSV missing required columns: {", ".join(missing_columns)}'}), 400
-
-#         # Define function to get value using case-insensitive lookup
-#         def get_value(row, field_name):
-#             # Look for the field using case-insensitive matching
-#             for key in row:
-#                 if key.lower().strip() == field_name.lower():
-#                     return row[key]
-#             return None
-            
-#         conn = get_db_connection()
-#         cursor = conn.cursor()
-
-#         count = 0
-#         # Group rows by category for preview (max 3 per category)
-#         category_samples = defaultdict(list)
-        
-#         for row in rows:
-#             # Get all values using case-insensitive matching
-#             category = get_value(row, 'category') or 'Uncategorized'
-            
-#             # Create a normalized row with standardized keys for preview display
-#             normalized_row = {
-#                 'category': category,
-#                 'amount': get_value(row, 'amount') or '0.0',
-#                 'type': get_value(row, 'type') or 'Expense',
-#                 'subcategory': get_value(row, 'subcategory') or '',
-#                 'note': get_value(row, 'note') or ''
-#             }
-            
-#             # Also include any additional columns from the original CSV
-#             for header in original_headers:
-#                 if header.lower().strip() not in ['category', 'amount', 'type', 'subcategory', 'note']:
-#                     normalized_row[header] = row[header]
-            
-#             # Store sample for preview (max 3 per category)
-#             if len(category_samples[category]) < 3:
-#                 category_samples[category].append(normalized_row)
-            
-#             # Process transaction for database
-#             txn_type = get_value(row, 'type') or 'Expense'
-#             txn_type = txn_type.title()
-#             if txn_type not in ['Income', 'Expense']:
-#                 txn_type = 'Expense'
-            
-#             subcategory = get_value(row, 'subcategory') or ''
-#             note = get_value(row, 'note') or ''
-            
-#             try:
-#                 amount_str = get_value(row, 'amount')
-#                 # Remove any currency symbols or commas that might cause parsing issues
-#                 if amount_str:
-#                     amount_str = amount_str.replace('₹', '').replace(',', '').strip()
-#                 amount = float(amount_str) if amount_str else 0.0
-#             except (ValueError, TypeError):
-#                 amount = 0.0
-
-#             cursor.execute('''
-#             INSERT INTO transactions (user_id, type, category, subcategory, note, amount, mode)
-#             VALUES (?, ?, ?, ?, ?, ?, ?)''', (
-#                 session['user_id'], txn_type, category, subcategory, note, amount, 'csv'
-#             ))
-#             count += 1
-
-#         conn.commit()
-#         conn.close()
-
-#         # Prepare preview data - list format for easier frontend display
-#         preview_data = []
-#         for category, category_rows in category_samples.items():
-#             for row in category_rows:
-#                 preview_data.append(row)
-
-#         return jsonify({
-#             'message': f'Successfully imported {count} transactions',
-#             'headers': original_headers,
-#             'preview': preview_data
-#         })
-
-#     except Exception as e:
-#         print(f"CSV Upload Error: {str(e)}")  # Server-side logging
-#         return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
-    
-# @app.route('/upload_receipt', methods=['POST'])
-# def upload_receipt():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-    
-#     if 'file' not in request.files:
-#         return jsonify({'error': 'No file provided'}), 400
-    
-#     file = request.files['file']
-    
-#     if file.filename == '':
-#         return jsonify({'error': 'No file selected'}), 400
-    
-#     # In a real application, you would:
-#     # 1. Save the file temporarily
-#     # 2. Process it with OCR
-#     # 3. Extract transaction data
-#     # 4. Save to database
-    
-#     # This is just a placeholder - in a real app you'd use OCR
-#     # Example with pytesseract (commented out):
-#     # image = Image.open(file.stream)
-#     # text = pytesseract.image_to_string(image)
-#     # Process the text to extract transaction data
-    
-#     # For now, we'll just add a placeholder transaction
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-    
-#     cursor.execute('''
-#     INSERT INTO transactions (user_id, category, amount, mode)
-#     VALUES (?, ?, ?, ?)
-#     ''', (session['user_id'], 'Receipt Upload', 0.00, 'receipt'))
-    
-#     conn.commit()
-#     conn.close()
-    
-#     return jsonify({'message': 'Receipt uploaded. Implement OCR to extract data.'})
-
-# @app.route('/get_transactions')
-# def get_transactions():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-    
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-#     LIMIT = 20
-#     OFFSET = int(request.args.get('offset', 0))
-#     transactions = cursor.execute('''
-#     SELECT * FROM transactions 
-#     WHERE user_id = ? 
-#     ORDER BY date DESC
-#     LIMIT ? OFFSET ?
-#     ''', (session['user_id'], LIMIT, OFFSET)).fetchall()
-    
-#     # Convert to list of dicts
-#     transaction_list = []
-#     for txn in transactions:
-#         transaction_list.append({
-#             'id': txn['id'],
-#             'type': txn['type'],
-#             'category': txn['category'],
-#             'subcategory': txn['subcategory'],
-#             'note': txn['note'],
-#             'amount': txn['amount'],
-#             'mode': txn['mode'],
-#             'date': txn['date']
-#         })
-    
-#     income_total = 0.0
-#     expense_total = 0.0
-#     for txn in transaction_list:
-#         txn_type = txn.get('type', 'Expense')
-#         if txn_type == 'Income':
-#             income_total += txn['amount']
-#         else:
-#             expense_total += txn['amount']
-
-#     net_savings = income_total - expense_total
-#     budget_advice = (
-#         f"Total Income: ₹{income_total:.2f}, Total Expenses: ₹{expense_total:.2f}, Net Savings: ₹{net_savings:.2f}"
-#     )
-
-    
-#     conn.close()
-    
-#     return jsonify({
-#         'transactions': transaction_list,
-#         'budget_advice': budget_advice
-#     })
-
-# @app.route('/get_budget_advice')
-# def get_budget_advice():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-    
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-    
-#     transactions = cursor.execute('''
-#     SELECT category, SUM(amount) as total
-#     FROM transactions 
-#     WHERE user_id = ? AND type='Expense'
-#     GROUP BY category
-#     ORDER BY total DESC
-#     ''', (session['user_id'],)).fetchall()
-    
-#     conn.close()
-    
-#     if not transactions:
-#         return jsonify({'advice': 'No transaction data available for budget analysis.'})
-    
-#     # Generate simple advice based on spending patterns
-#     # In a real app, this would be more sophisticated
-
-#     highest_category = transactions[0]['category']
-#     highest_amount = transactions[0]['total']
-    
-#     advice = f"Your highest spending category is '{highest_category}' at ₹{highest_amount:.2f}."
-    
-#     if len(transactions) > 1:
-#         advice += f" Consider reducing spending in this category."
-    
-#     return jsonify({'advice': advice})
-
-
-
-# if __name__ == '__main__':
-#     app.run(debug=True)
-
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 import sqlite3
 import pandas as pd
@@ -549,17 +8,22 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import csv
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from io import TextIOWrapper
+import re
 
 # Machine Learning imports
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, IsolationForest, GradientBoostingClassifier
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, mean_squared_error
 import pickle
 import joblib
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.svm import OneClassSVM
+from sklearn.linear_model import LinearRegression
 
 now = datetime.now(timezone.utc).isoformat()
 
@@ -577,28 +41,30 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Create users table if it doesn't exist
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL
-    )
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        )
     ''')
     
+    # Create transactions table if it doesn't exist
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('Income', 'Expense')),
-        category TEXT NOT NULL,
-        subcategory TEXT,
-        note TEXT,
-        amount REAL NOT NULL,
-        mode TEXT DEFAULT 'manual',
-        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-    )
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            type TEXT NOT NULL CHECK(type IN ('Income', 'Expense')),
+            category TEXT NOT NULL,
+            subcategory TEXT,
+            note TEXT,
+            amount REAL NOT NULL,
+            mode TEXT DEFAULT 'manual',
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
     ''')
     
     conn.commit()
@@ -649,35 +115,51 @@ def load_ml_models():
 load_ml_models()
 
 def train_ml_models(user_id=None):
-    """Train ML models on transaction data"""
+    """Train ML models on transaction data with enhanced features"""
     global category_classifier, amount_regressor, label_encoders, tfidf_vectorizer
     
     conn = get_db_connection()
     
-    # If user_id is provided, only train on that user's data
-    # Otherwise train on all data (could be useful for initial system-wide model)
+    # Get transaction data with more features
     if user_id:
-        query = "SELECT * FROM transactions WHERE user_id = ? AND type = 'Expense'"
+        query = """
+            SELECT 
+                t.*,
+                strftime('%Y-%m', date) as month,
+                strftime('%w', date) as day_of_week,
+                strftime('%H', date) as hour_of_day
+            FROM transactions t 
+            WHERE user_id = ? AND type = 'Expense'
+        """
         params = (user_id,)
     else:
-        query = "SELECT * FROM transactions WHERE type = 'Expense'"
+        query = """
+            SELECT 
+                t.*,
+                strftime('%Y-%m', date) as month,
+                strftime('%w', date) as day_of_week,
+                strftime('%H', date) as hour_of_day
+            FROM transactions t 
+            WHERE type = 'Expense'
+        """
         params = ()
     
-    # Load transaction data into pandas DataFrame
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     
-    # Check if we have enough data to train (at least 10 records)
     if len(df) < 10:
         return False, "Not enough transaction data to train models (need at least 10 expense records)"
     
-    # Preprocess data
+    # Enhanced preprocessing
     df = df.dropna(subset=['category', 'amount'])
-    
-    # Fill missing values
     df['note'] = df['note'].fillna('')
     df['subcategory'] = df['subcategory'].fillna('')
     df['mode'] = df['mode'].fillna('manual')
+    
+    # Add temporal features
+    df['month'] = pd.to_datetime(df['month'] + '-01').dt.month
+    df['day_of_week'] = df['day_of_week'].astype(int)
+    df['hour_of_day'] = df['hour_of_day'].astype(int)
     
     # Initialize encoders
     le_mode = LabelEncoder()
@@ -693,26 +175,40 @@ def train_ml_models(user_id=None):
         'subcategory': le_subcat
     }
     
-    # Vectorize text notes
-    tfidf_vectorizer = TfidfVectorizer(max_features=100)
+    # Enhanced text processing
+    tfidf_vectorizer = TfidfVectorizer(
+        max_features=100,
+        ngram_range=(1, 2),
+        stop_words='english'
+    )
     X_note = tfidf_vectorizer.fit_transform(df['note']).toarray()
     
-    # Combine features
+    # Combine all features
     X = np.concatenate([
         X_note,
-        df[['amount', 'mode_encoded', 'subcategory_encoded']].values
+        df[['amount', 'mode_encoded', 'subcategory_encoded', 
+            'month', 'day_of_week', 'hour_of_day']].values
     ], axis=1)
     
     # Target variables
     y_category = df['category']
     y_amount = df['amount']
     
-    # Train category classifier
-    category_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+    # Train enhanced models
+    category_classifier = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=10,
+        min_samples_split=5,
+        random_state=42
+    )
     category_classifier.fit(X, y_category)
     
-    # Train amount regressor
-    amount_regressor = RandomForestRegressor(n_estimators=100, random_state=42)
+    amount_regressor = RandomForestRegressor(
+        n_estimators=200,
+        max_depth=10,
+        min_samples_split=5,
+        random_state=42
+    )
     amount_regressor.fit(X, y_amount)
     
     # Save models and preprocessing tools
@@ -779,7 +275,7 @@ def generate_budget_advice(user_id):
         (user_id,)
     ).fetchone()[0] or 0
     
-    # Get top spending categories
+    # Get top spending categories with their totals
     top_categories = cursor.execute('''
         SELECT category, SUM(amount) as total
         FROM transactions 
@@ -927,433 +423,527 @@ def user_info():
 def add_transaction():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
-    
-    category = request.form.get('category')
-    subcategory = request.form.get('subcategory', '')
-    note = request.form.get('note', '')
-    amount = request.form.get('amount')
-    
-    if not category or not amount:
-        return jsonify({'error': 'Missing required fields'}), 400
-    
+
+    app.logger.info(f"[add_transaction] user_id={session['user_id']} Received transaction data: {request.form}")
+
     try:
-        amount = float(amount)
-    except ValueError:
-        return jsonify({'error': 'Amount must be a number'}), 400
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    txn_type = request.form.get('type', 'Expense').title()
-    if txn_type not in ['Income', 'Expense']:
-        txn_type = 'Expense'
+        # Get and validate required fields
+        txn_type = request.form.get('type')
+        amount = request.form.get('amount')
+        note = request.form.get('note', '')
+        mode = request.form.get('mode', 'manual')
 
-    cursor.execute('''
-    INSERT INTO transactions (user_id, type, category, subcategory, note, amount)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ''', (session['user_id'], txn_type, category, subcategory, note, amount))
+        app.logger.info(f"[add_transaction] Processing transaction - Type: {txn_type}, Amount: {amount}")
 
-    
-    conn.commit()
-    conn.close()
-    
-    # Retrain ML models if we have enough data (happens in background)
-    train_ml_models(session['user_id'])
-    
-    return jsonify({'message': 'Transaction added successfully'})
+        if not txn_type:
+            app.logger.error("Transaction type is missing")
+            return jsonify({'error': 'Transaction type is required'}), 400
 
-# @app.route('/upload_csv', methods=['POST'])
-# def upload_csv():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-    
-#     if 'file' not in request.files:
-#         return jsonify({'error': 'No file provided'}), 400
+        if not amount:
+            app.logger.error("Amount is missing")
+            return jsonify({'error': 'Amount is required'}), 400
 
-#     file = request.files['file']
+        try:
+            amount = float(str(amount).replace(',', '').replace('₹', '').strip())
+            if amount <= 0:
+                app.logger.error(f"Invalid amount value: {amount}")
+                return jsonify({'error': 'Amount must be greater than 0'}), 400
+        except ValueError:
+            app.logger.error(f"Invalid amount value: {amount}")
+            return jsonify({'error': 'Invalid amount format'}), 400
 
-#     if file.filename == '':
-#         return jsonify({'error': 'No file selected'}), 400
+        # Handle transaction type and category
+        if txn_type == 'Income':
+            category = 'Income'
+            subcategory = ''
+        else:
+            category = request.form.get('category')
+            subcategory = request.form.get('subcategory', '')
+            if not category:
+                app.logger.error("Category missing for expense transaction")
+                return jsonify({'error': 'Category is required for expenses'}), 400
 
-#     if not file.filename.endswith('.csv'):
-#         return jsonify({'error': 'File must be a CSV'}), 400
+        # Get current timestamp
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-#     try:
-#         # Read CSV
-#         stream = io.StringIO(file.stream.read().decode("UTF8", errors='replace'), newline=None)
-#         csv_reader = csv.DictReader(stream)
-#         rows = list(csv_reader)
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-#         if not rows:
-#             return jsonify({'error': 'CSV is empty or invalid format'}), 400
+        try:
+            # Insert the transaction
+            cursor.execute('''
+                INSERT INTO transactions (
+                    user_id, type, category, subcategory, 
+                    note, amount, mode, date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                session['user_id'], txn_type, category, subcategory,
+                note, amount, mode, current_time
+            ))
+            conn.commit()
 
-#         # Get all headers and create a case-insensitive lookup dictionary
-#         original_headers = list(rows[0].keys())
-#         headers_lookup = {h.lower().strip(): h for h in original_headers}
-        
-#         # Check for required columns (case-insensitive)
-#         required_columns = ['category', 'amount']
-#         missing_columns = []
-        
-#         for required in required_columns:
-#             if required.lower() not in headers_lookup:
-#                 missing_columns.append(required)
-        
-#         if missing_columns:
-#             return jsonify({'error': f'CSV missing required columns: {", ".join(missing_columns)}'}), 400
+            # Get the inserted transaction
+            cursor.execute('''
+                SELECT * FROM transactions 
+                WHERE id = last_insert_rowid()
+            ''')
+            new_transaction = cursor.fetchone()
+            app.logger.info(f"[add_transaction] New transaction added: {dict(new_transaction)}")
 
-#         # Define function to get value using case-insensitive lookup
-#         def get_value(row, field_name):
-#             # Look for the field using case-insensitive matching
-#             for key in row:
-#                 if key.lower().strip() == field_name.lower():
-#                     return row[key]
-#             return None
-            
-#         conn = get_db_connection()
-#         cursor = conn.cursor()
+            # Get updated totals with explicit type checks
+            cursor.execute('''
+                SELECT COALESCE(SUM(amount), 0) as total_income
+                FROM transactions 
+                WHERE user_id = ? AND type = 'Income'
+            ''', (session['user_id'],))
+            income_result = cursor.fetchone()
+            income_total = float(income_result['total_income']) if income_result and income_result['total_income'] is not None else 0
 
-#         count = 0
-#         # Group rows by category for preview (max 3 per category)
-#         category_samples = defaultdict(list)
-        
-#         for row in rows:
-#             # Get all values using case-insensitive matching
-#             category = get_value(row, 'category') or 'Uncategorized'
-            
-#             # Create a normalized row with standardized keys for preview display
-#             normalized_row = {
-#                 'category': category,
-#                 'amount': get_value(row, 'amount') or '0.0',
-#                 'type': get_value(row, 'type') or 'Expense',
-#                 'subcategory': get_value(row, 'subcategory') or '',
-#                 'note': get_value(row, 'note') or ''
-#             }
-            
-#             # Also include any additional columns from the original CSV
-#             for header in original_headers:
-#                 if header.lower().strip() not in ['category', 'amount', 'type', 'subcategory', 'note']:
-#                     normalized_row[header] = row[header]
-            
-#             # Store sample for preview (max 3 per category)
-#             if len(category_samples[category]) < 3:
-#                 category_samples[category].append(normalized_row)
-            
-#             # Process transaction for database
-#             txn_type = get_value(row, 'type') or 'Expense'
-#             txn_type = txn_type.title()
-#             if txn_type not in ['Income', 'Expense']:
-#                 txn_type = 'Expense'
-            
-#             subcategory = get_value(row, 'subcategory') or ''
-#             note = get_value(row, 'note') or ''
-            
-#             try:
-#                 amount_str = get_value(row, 'amount')
-#                 # Remove any currency symbols or commas that might cause parsing issues
-#                 if amount_str:
-#                     amount_str = amount_str.replace('₹', '').replace(',', '').strip()
-#                 amount = float(amount_str) if amount_str else 0.0
-#             except (ValueError, TypeError):
-#                 amount = 0.0
+            cursor.execute('''
+                SELECT COALESCE(SUM(amount), 0) as total_expenses
+                FROM transactions 
+                WHERE user_id = ? AND type = 'Expense'
+            ''', (session['user_id'],))
+            expense_result = cursor.fetchone()
+            expense_total = float(expense_result['total_expenses']) if expense_result and expense_result['total_expenses'] is not None else 0
 
-#             cursor.execute('''
-#             INSERT INTO transactions (user_id, type, category, subcategory, note, amount, mode)
-#             VALUES (?, ?, ?, ?, ?, ?, ?)''', (
-#                 session['user_id'], txn_type, category, subcategory, note, amount, 'csv'
-#             ))
-#             count += 1
+            net_savings = income_total - expense_total
 
-#         conn.commit()
-#         conn.close()
+            app.logger.info(f"[add_transaction] Updated totals - Income: {income_total}, Expenses: {expense_total}, Savings: {net_savings}")
 
-#         # Prepare preview data - list format for easier frontend display
-#         preview_data = []
-#         for category, category_rows in category_samples.items():
-#             for row in category_rows:
-#                 preview_data.append(row)
+            return jsonify({
+                'message': 'Transaction added successfully',
+                'transaction': {
+                    'id': new_transaction['id'],
+                    'type': new_transaction['type'],
+                    'category': new_transaction['category'],
+                    'subcategory': new_transaction['subcategory'],
+                    'note': new_transaction['note'],
+                    'amount': float(new_transaction['amount']),
+                    'mode': new_transaction['mode'],
+                    'date': new_transaction['date']
+                },
+                'totals': {
+                    'income': income_total,
+                    'expenses': expense_total,
+                    'savings': net_savings
+                }
+            })
 
-#         # Retrain ML models with new data (happens in background)
-#         train_ml_models(session['user_id'])
+        except sqlite3.Error as e:
+            app.logger.error(f"Database error in add_transaction: {str(e)}")
+            conn.rollback()
+            return jsonify({'error': 'Database error occurred'}), 500
 
-#         return jsonify({
-#             'message': f'Successfully imported {count} transactions',
-#             'headers': original_headers,
-#             'preview': preview_data
-#         })
+        finally:
+            conn.close()
 
-#     except Exception as e:
-#         print(f"CSV Upload Error: {str(e)}")  # Server-side logging
-#         return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
+    except Exception as e:
+        app.logger.error(f"Unexpected error in add_transaction: {str(e)}")
+        return jsonify({'error': 'An unexpected error occurred'}), 500
 
 @app.route('/upload_csv', methods=['POST'])
 def upload_csv():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
+        
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+        
+    if not file.filename.endswith('.csv'):
+        return jsonify({'error': 'Please upload a CSV file'}), 400
     
     try:
-        # Check if file exists in request
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
-
-        file = request.files['file']
+        # Read the CSV file
+        stream = TextIOWrapper(file.stream, encoding='utf-8-sig')
+        csv_reader = csv.DictReader(stream)
         
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-
-        if not file.filename.endswith('.csv'):
-            return jsonify({'error': 'File must be a CSV'}), 400
+        # Log the headers for debugging
+        app.logger.info(f"CSV Headers: {csv_reader.fieldnames}")
         
-        # Log file info for debugging
-        app.logger.info(f"Processing CSV file: {file.filename}")
+        # Validate required columns
+        required_columns = {'category', 'amount', 'type'}  # Added 'type' as required
+        if not all(col in csv_reader.fieldnames for col in required_columns):
+            missing = required_columns - set(csv_reader.fieldnames)
+            return jsonify({'error': f'CSV missing required columns: {", ".join(missing)}'}), 400
         
-        # Read CSV with proper error handling
-        try:
-            # Save content as string first for debugging if needed
-            file_content = file.read()
-            file.seek(0)  # Reset file pointer after reading
-            
-            # Handle potential encoding issues
-            try:
-                stream = io.StringIO(file_content.decode("UTF8", errors='replace'), newline=None)
-            except UnicodeDecodeError:
-                # Try a different encoding if UTF-8 fails
-                stream = io.StringIO(file_content.decode("latin-1", errors='replace'), newline=None)
-            
-            csv_reader = csv.DictReader(stream)
-            rows = list(csv_reader)
-            
-            if not rows:
-                return jsonify({'error': 'CSV is empty or invalid format'}), 400
-                
-            # Log row count for debugging
-            app.logger.info(f"CSV contains {len(rows)} rows")
-            
-        except Exception as csv_error:
-            app.logger.error(f"Error parsing CSV: {str(csv_error)}")
-            return jsonify({'error': f'Could not parse CSV file: {str(csv_error)}'}), 400
-
-        # Get all headers and create a case-insensitive lookup dictionary
-        original_headers = list(rows[0].keys())
-        app.logger.info(f"CSV headers: {original_headers}")
-        headers_lookup = {h.lower().strip(): h for h in original_headers}
-        
-        # Check for required columns (case-insensitive)
-        required_columns = ['category', 'amount']
-        missing_columns = []
-        
-        for required in required_columns:
-            if required.lower() not in headers_lookup:
-                missing_columns.append(required)
-        
-        if missing_columns:
-            return jsonify({'error': f'CSV missing required columns: {", ".join(missing_columns)}'}), 400
-
-        # Define function to get value using case-insensitive lookup
-        def get_value(row, field_name):
-            # Look for the field using case-insensitive matching
-            for key in row:
-                if key.lower().strip() == field_name.lower():
-                    return row[key]
-            return None
-            
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        count = 0
-        # Group rows by category for preview (max 3 per category)
-        category_samples = defaultdict(list)
-        imported_transactions = []
         
-        for row in rows:
-            # Get all values using case-insensitive matching
-            category = get_value(row, 'category') or 'Uncategorized'
-            
-            # Create a normalized row with standardized keys for preview display
-            normalized_row = {
-                'category': category,
-                'amount': get_value(row, 'amount') or '0.0',
-                'type': get_value(row, 'type') or 'Expense',
-                'subcategory': get_value(row, 'subcategory') or '',
-                'note': get_value(row, 'note') or ''
-            }
-            
-            # Also include any additional columns from the original CSV
-            for header in original_headers:
-                if header.lower().strip() not in ['category', 'amount', 'type', 'subcategory', 'note']:
-                    normalized_row[header] = row[header]
-            
-            # Store sample for preview (max 3 per category)
-            if len(category_samples[category]) < 3:
-                category_samples[category].append(normalized_row)
-            
-            # Process transaction for database
-            txn_type = get_value(row, 'type') or 'Expense'
-            txn_type = txn_type.title()
-            if txn_type not in ['Income', 'Expense']:
-                txn_type = 'Expense'
-            
-            subcategory = get_value(row, 'subcategory') or ''
-            note = get_value(row, 'note') or ''
-            
-            try:
-                amount_str = get_value(row, 'amount')
-                # Remove any currency symbols or commas that might cause parsing issues
-                if amount_str:
-                    amount_str = str(amount_str).replace('₹', '').replace(',', '').strip()
-                amount = float(amount_str) if amount_str else 0.0
-            except (ValueError, TypeError) as e:
-                app.logger.warning(f"Error converting amount '{amount_str}': {str(e)}")
-                amount = 0.0
-
-            try:
-                cursor.execute('''
-                INSERT INTO transactions (user_id, type, category, subcategory, note, amount, mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?)''', (
-                    session['user_id'], txn_type, category, subcategory, note, amount, 'csv'
-                ))
-                
-                # Get the last inserted row ID
-                transaction_id = cursor.lastrowid
-                
-                # Add to our list of imported transactions
-                imported_transactions.append({
-                    'id': transaction_id,
-                    'type': txn_type,
-                    'category': category,
-                    'subcategory': subcategory,
-                    'note': note,
-                    'amount': amount,
-                    'mode': 'csv',
-                    'date': datetime.now(timezone.utc).isoformat()
-                })
-                
-                count += 1
-            except sqlite3.Error as db_error:
-                app.logger.error(f"Database error inserting row: {str(db_error)}")
-                # Continue with other rows even if one fails
-
+        # Clear existing transactions for this user
+        cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
         conn.commit()
-        conn.close()
-
-        # Prepare preview data - list format for easier frontend display
-        preview_data = []
-        for category, category_rows in category_samples.items():
-            for row in category_rows:
-                preview_data.append(row)
-
-        # Retrain ML models with new data (happens in background)
-        try:
-            # Don't wait for training to complete
-            import threading
-            thread = threading.Thread(target=train_ml_models, args=(session['user_id'],))
-            thread.daemon = True
-            thread.start()
-        except Exception as e:
-            app.logger.error(f"Error starting model training: {str(e)}")
-            # Don't fail the upload if model training fails
-
-        app.logger.info(f"CSV upload complete: {count} transactions imported")
         
-        return jsonify({
-            'message': f'Successfully imported {count} transactions',
-            'headers': original_headers,
-            'preview': preview_data,
-            'transactions': imported_transactions  # Add the actual imported transactions to the response
-        })
-
+        # Process transactions
+        imported_transactions = []
+        row_count = 0
+        errors = []
+        income_total = 0
+        expense_total = 0
+        
+        for row_num, row in enumerate(csv_reader, 1):
+            try:
+                # Validate and clean data
+                category = row['category'].strip()
+                if not category:
+                    errors.append(f"Row {row_num}: Empty category")
+                    continue
+                    
+                try:
+                    amount = float(str(row['amount']).replace(',', '').replace('₹', '').strip())
+                except (ValueError, TypeError):
+                    errors.append(f"Row {row_num}: Invalid amount '{row['amount']}'")
+                    continue
+                
+                # Get optional fields with defaults
+                description = row.get('description', '').strip()
+                date_str = row.get('date', datetime.now().strftime('%Y-%m-%d'))
+                
+                # Handle transaction type
+                transaction_type = row.get('type', 'Expense').strip().title()
+                if transaction_type not in ['Income', 'Expense']:
+                    errors.append(f"Row {row_num}: Invalid transaction type '{transaction_type}', using default 'Expense'")
+                    transaction_type = 'Expense'
+                
+                # Ensure amount is positive
+                amount = abs(amount)
+                
+                # Update totals
+                if transaction_type == 'Income':
+                    income_total += amount
+                else:
+                    expense_total += amount
+                
+                try:
+                    # Insert transaction
+                    cursor.execute('''
+                        INSERT INTO transactions (user_id, type, category, amount, note, date)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (session['user_id'], transaction_type, category, amount, description, date_str))
+                    
+                    imported_transactions.append({
+                        'type': transaction_type,
+                        'category': category,
+                        'amount': amount,
+                        'description': description,
+                        'date': date_str
+                    })
+                    row_count += 1
+                except sqlite3.IntegrityError as e:
+                    errors.append(f"Row {row_num}: Database error - {str(e)}")
+                    continue
+                
+            except Exception as e:
+                app.logger.error(f"Error processing row {row_num}: {str(e)}")
+                errors.append(f"Row {row_num}: {str(e)}")
+                continue
+        
+        conn.commit()
+        
+        if row_count == 0:
+            error_msg = "No valid transactions found in the CSV file"
+            if errors:
+                error_msg += f". Errors: {'; '.join(errors)}"
+            return jsonify({'error': error_msg}), 400
+        
+        # Calculate net savings
+        net_savings = income_total - expense_total
+        savings_rate = (net_savings / income_total * 100) if income_total > 0 else 0
+        
+        # Get category-wise breakdown
+        category_transactions = {}
+        cursor.execute('''
+            SELECT type, category, COUNT(*) as count, SUM(amount) as total
+            FROM transactions 
+            WHERE user_id = ?
+            GROUP BY type, category
+        ''', (session['user_id'],))
+        categories = cursor.fetchall()
+        
+        for cat in categories:
+            key = f"{cat['type']}_{cat['category']}"
+            category_transactions[key] = {
+                'type': cat['type'],
+                'category': cat['category'],
+                'count': cat['count'],
+                'total': float(cat['total'])
+            }
+        
+        response = {
+            'message': f'Successfully imported {row_count} transactions',
+            'summary': {
+                'total_income': income_total,
+                'total_expenses': expense_total,
+                'net_savings': net_savings,
+                'savings_rate': savings_rate
+            },
+            'transactions': imported_transactions[:5],  # Return first 5 transactions as preview
+            'category_breakdown': category_transactions
+        }
+        
+        if errors:
+            response['warnings'] = errors
+            
+        return jsonify(response)
+        
     except Exception as e:
-        app.logger.error(f"CSV Upload Error: {str(e)}")
-        return jsonify({'error': f'Error processing CSV: {str(e)}'}), 400
-    
-@app.route('/upload_receipt', methods=['POST'])
-def upload_receipt():
+        app.logger.error(f"Error processing CSV: {str(e)}")
+        return jsonify({'error': f'Error processing CSV file: {str(e)}'}), 500
+        
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/clear_transactions', methods=['POST'])
+def clear_transactions():
+    """Clear all transactions for the current user"""
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
     
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
-    file = request.files['file']
-    
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
-    # In a real application, you would:
-    # 1. Save the file temporarily
-    # 2. Process it with OCR
-    # 3. Extract transaction data
-    # 4. Save to database
-    
-    # This is just a placeholder - in a real app you'd use OCR
-    # Example with pytesseract (commented out):
-    # image = Image.open(file.stream)
-    # text = pytesseract.image_to_string(image)
-    # Process the text to extract transaction data
-    
-    # For now, we'll just add a placeholder transaction
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-    INSERT INTO transactions (user_id, category, amount, mode)
-    VALUES (?, ?, ?, ?)
-    ''', (session['user_id'], 'Receipt Upload', 0.00, 'receipt'))
-    
-    conn.commit()
-    conn.close()
-    
-    return jsonify({'message': 'Receipt uploaded. Implement OCR to extract data.'})
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
+        conn.commit()
+        return jsonify({'message': 'All transactions cleared successfully'})
+    except Exception as e:
+        return jsonify({'error': 'Failed to clear transactions'}), 500
 
 @app.route('/get_transactions')
 def get_transactions():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    LIMIT = 20
-    OFFSET = int(request.args.get('offset', 0))
-    transactions = cursor.execute('''
-    SELECT * FROM transactions 
-    WHERE user_id = ? 
-    ORDER BY date DESC
-    LIMIT ? OFFSET ?
-    ''', (session['user_id'], LIMIT, OFFSET)).fetchall()
-    
-    # Convert to list of dicts
-    transaction_list = []
-    for txn in transactions:
-        transaction_list.append({
-            'id': txn['id'],
-            'type': txn['type'],
-            'category': txn['category'],
-            'subcategory': txn['subcategory'],
-            'note': txn['note'],
-            'amount': txn['amount'],
-            'mode': txn['mode'],
-            'date': txn['date']
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        LIMIT = 20
+        OFFSET = int(request.args.get('offset', 0))
+        
+        # Get transactions with date filtering
+        date_filter = request.args.get('date_filter', 'all')
+        if date_filter == 'today':
+            cursor.execute('''
+                SELECT * FROM transactions 
+                WHERE user_id = ? AND date >= date('now', 'start of day')
+                ORDER BY date DESC
+                LIMIT ? OFFSET ?
+            ''', (session['user_id'], LIMIT, OFFSET))
+        elif date_filter == 'this_month':
+            cursor.execute('''
+                SELECT * FROM transactions 
+                WHERE user_id = ? AND date >= date('now', 'start of month')
+                ORDER BY date DESC
+                LIMIT ? OFFSET ?
+            ''', (session['user_id'], LIMIT, OFFSET))
+        else:
+            cursor.execute('''
+                SELECT * FROM transactions 
+                WHERE user_id = ? 
+                ORDER BY date DESC
+                LIMIT ? OFFSET ?
+            ''', (session['user_id'], LIMIT, OFFSET))
+        
+        transactions = cursor.fetchall()
+        
+        # Log all transactions being returned
+        app.logger.info(f"[get_transactions] user_id={session['user_id']} Transactions returned: {[dict(txn) for txn in transactions]}")
+        
+        transaction_list = []
+        for txn in transactions:
+            transaction_list.append({
+                'id': txn['id'],
+                'type': txn['type'],
+                'category': txn['category'],
+                'subcategory': txn['subcategory'],
+                'note': txn['note'],
+                'amount': float(txn['amount']),
+                'mode': txn['mode'],
+                'date': txn['date']
+            })
+        
+        # Get totals for the filtered period
+        if date_filter == 'today':
+            income_total = cursor.execute(
+                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Income" AND date >= date("now", "start of day")',
+                (session['user_id'],)
+            ).fetchone()[0] or 0
+            expense_total = cursor.execute(
+                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Expense" AND date >= date("now", "start of day")',
+                (session['user_id'],)
+            ).fetchone()[0] or 0
+        elif date_filter == 'this_month':
+            income_total = cursor.execute(
+                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Income" AND date >= date("now", "start of month")',
+                (session['user_id'],)
+            ).fetchone()[0] or 0
+            expense_total = cursor.execute(
+                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Expense" AND date >= date("now", "start of month")',
+                (session['user_id'],)
+            ).fetchone()[0] or 0
+        else:
+            income_total = cursor.execute(
+                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Income"',
+                (session['user_id'],)
+            ).fetchone()[0] or 0
+            expense_total = cursor.execute(
+                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Expense"',
+                (session['user_id'],)
+            ).fetchone()[0] or 0
+        
+        net_savings = income_total - expense_total
+        budget_advice = f"Total Income: ₹{income_total:.2f}\nTotal Expenses: ₹{expense_total:.2f}\nNet Savings: ₹{net_savings:.2f}"
+        
+        return jsonify({
+            'transactions': transaction_list,
+            'budget_advice': budget_advice,
+            'date_filter': date_filter
         })
-    
-    # Generate smart budget advice using the ML-powered function
-    budget_advice = generate_budget_advice(session['user_id'])
-    
-    conn.close()
-    
-    return jsonify({
-        'transactions': transaction_list,
-        'budget_advice': budget_advice
-    })
+    except Exception as e:
+        app.logger.error(f"[get_transactions] Error: {str(e)}")
+        return jsonify({'error': 'An error occurred while fetching transactions'}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/get_budget_advice')
 def get_budget_advice():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
-    
-    # Use the new ML-powered budget advice function
-    advice = generate_budget_advice(session['user_id'])
-    
-    return jsonify({'advice': advice})
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Debug: Log all transactions for the user
+        cursor.execute('''
+            SELECT type, amount, category, date 
+            FROM transactions 
+            WHERE user_id = ?
+            ORDER BY date DESC
+        ''', (session['user_id'],))
+        all_transactions = cursor.fetchall()
+        app.logger.info(f"[get_budget_advice] All transactions for user {session['user_id']}: {[dict(row) for row in all_transactions]}")
+
+        # Get income with explicit type check
+        cursor.execute('''
+            SELECT COALESCE(SUM(amount), 0) as total_income
+            FROM transactions 
+            WHERE user_id = ? AND type = 'Income'
+        ''', (session['user_id'],))
+        income_result = cursor.fetchone()
+        income = float(income_result['total_income']) if income_result and income_result['total_income'] is not None else 0
+        app.logger.info(f"[get_budget_advice] Total income calculated: {income}")
+
+        # Get expenses with explicit type check
+        cursor.execute('''
+            SELECT COALESCE(SUM(amount), 0) as total_expenses
+            FROM transactions 
+            WHERE user_id = ? AND type = 'Expense'
+        ''', (session['user_id'],))
+        expense_result = cursor.fetchone()
+        expenses = float(expense_result['total_expenses']) if expense_result and expense_result['total_expenses'] is not None else 0
+        app.logger.info(f"[get_budget_advice] Total expenses calculated: {expenses}")
+
+        # Get income categories breakdown with explicit type check
+        cursor.execute('''
+            SELECT category, COALESCE(SUM(amount), 0) as total
+            FROM transactions 
+            WHERE user_id = ? AND type = 'Income'
+            GROUP BY category
+            ORDER BY total DESC
+        ''', (session['user_id'],))
+        income_categories = cursor.fetchall()
+        app.logger.info(f"[get_budget_advice] Income categories: {[dict(row) for row in income_categories]}")
+
+        # Get expense categories breakdown
+        cursor.execute('''
+            SELECT category, COALESCE(SUM(amount), 0) as total
+            FROM transactions 
+            WHERE user_id = ? AND type = 'Expense'
+            GROUP BY category
+            ORDER BY total DESC
+        ''', (session['user_id'],))
+        expense_categories = cursor.fetchall()
+
+        # Get recent transactions
+        cursor.execute('''
+            SELECT type, amount, category, note, date
+            FROM transactions 
+            WHERE user_id = ?
+            ORDER BY date DESC
+            LIMIT 5
+        ''', (session['user_id'],))
+        recent_transactions = cursor.fetchall()
+
+        conn.close()
+
+        net_savings = income - expenses
+        savings_rate = (net_savings / income * 100) if income > 0 else 0
+
+        advice = []
+        
+        # Financial Summary
+        advice.append(f"💰 Total Income: ₹{income:,.2f}")
+        advice.append(f"💸 Total Expenses: ₹{expenses:,.2f}")
+        advice.append(f"🏦 Net Savings: ₹{net_savings:,.2f} ({savings_rate:.1f}% of income)")
+
+        # Income Analysis
+        if income > 0:
+            advice.append("\n📈 Income Breakdown:")
+            for category, total in income_categories:
+                percentage = (total / income * 100) if income > 0 else 0
+                advice.append(f"  • {category}: ₹{total:,.2f} ({percentage:.1f}% of total income)")
+
+        # Expense Analysis
+        if expenses > 0:
+            advice.append("\n📊 Expense Breakdown:")
+            for category, total in expense_categories:
+                percentage = (total / expenses * 100) if expenses > 0 else 0
+                advice.append(f"  • {category}: ₹{total:,.2f} ({percentage:.1f}% of total expenses)")
+                if percentage > 30:
+                    advice.append(f"    ⚠️ This category represents a large portion of your expenses.")
+
+        # Recent Transactions
+        if recent_transactions:
+            advice.append("\n📝 Recent Transactions:")
+            for txn in recent_transactions:
+                date = txn['date']
+                amount = float(txn['amount'])
+                sign = '+' if txn['type'] == 'Income' else '-'
+                advice.append(f"  • {date}: {sign}₹{amount:,.2f} - {txn['category']}")
+                if txn['note']:
+                    advice.append(f"    Note: {txn['note']}")
+
+        # Financial Health Analysis
+        if income > 0:
+            advice.append("\n💡 Financial Health Analysis:")
+            if expenses > income:
+                advice.append("⚠️ Warning: Your expenses exceed your income!")
+                advice.append("Consider reducing expenses or finding additional income sources.")
+            elif expenses > (income * 0.8):
+                advice.append("⚠️ Caution: Your expenses are high relative to your income.")
+                advice.append("Try to keep expenses below 80% of your income for better financial health.")
+            else:
+                advice.append("✅ Good job! Your expenses are well within your income.")
+
+            # Savings Rate Analysis
+            if savings_rate < 20:
+                advice.append("\n💡 Try to aim for at least 20% savings rate for good financial health.")
+            elif savings_rate < 30:
+                advice.append("\n✅ Good job! Your savings rate is healthy.")
+            else:
+                advice.append("\n🌟 Excellent! Your savings rate is above 30%.")
+
+        if income == 0:
+            return jsonify({'advice': 'Add income transactions to get personalized advice.'})
+        
+        return jsonify({'advice': "\n".join(advice)})
+    except Exception as e:
+        app.logger.error(f"[get_budget_advice] Error: {str(e)}")
+        return jsonify({'advice': 'Unable to generate budget advice at this time.'})
 
 @app.route('/predict_category', methods=['POST'])
 def predict_category():
@@ -1406,111 +996,383 @@ def train_models_endpoint():
 
 @app.route('/get_spending_insights')
 def get_spending_insights():
-    """Get ML-powered insights about spending patterns"""
+    """Get enhanced ML-powered insights about spending patterns"""
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
     
     conn = get_db_connection()
     
-    # Get monthly spending by category
+    # Get detailed transaction data
     df = pd.read_sql_query('''
         SELECT 
-            strftime('%Y-%m', date) as month,
+            strftime('%Y-%m-%d', date) as date,
+            strftime('%w', date) as day_of_week,
+            strftime('%H', date) as hour_of_day,
             category,
-            SUM(amount) as total
-        FROM transactions
-        WHERE user_id = ? AND type = 'Expense'
-        GROUP BY month, category
-        ORDER BY month, total DESC
-    ''', conn, params=(session['user_id'],))
-    
-    # Get overall stats
-    total_spending = pd.read_sql_query('''
-        SELECT 
-            SUM(CASE WHEN type = 'Expense' THEN amount ELSE 0 END) as total_expenses,
-            SUM(CASE WHEN type = 'Income' THEN amount ELSE 0 END) as total_income
+            amount,
+            note,
+            type,
+            subcategory
         FROM transactions
         WHERE user_id = ?
+        ORDER BY date DESC
     ''', conn, params=(session['user_id'],))
     
     conn.close()
     
-    # Skip insights if not enough data
     if len(df) == 0:
         return jsonify({
             'message': 'Not enough data for insights',
             'insights': []
         })
     
-    # Calculate insights
     insights = []
     
-    # Format the data for the insights
-    monthly_data = defaultdict(dict)
-    categories = set()
+    # Basic financial summary
+    total_expenses = df[df['type'] == 'Expense']['amount'].sum()
+    total_income = df[df['type'] == 'Income']['amount'].sum()
+    net_savings = total_income - total_expenses
+    savings_rate = (net_savings / total_income * 100) if total_income > 0 else 0
     
-    for _, row in df.iterrows():
-        monthly_data[row['month']][row['category']] = row['total']
-        categories.add(row['category'])
+    insights.append({
+        'type': 'summary',
+        'title': 'Financial Summary',
+        'details': [
+            f"💰 Total Income: ₹{total_income:,.2f}",
+            f"💸 Total Expenses: ₹{total_expenses:,.2f}",
+            f"🏦 Net Savings: ₹{net_savings:,.2f} ({savings_rate:.1f}% of income)"
+        ]
+    })
     
-    # Sort months chronologically
-    months = sorted(monthly_data.keys())
-    
-    if len(months) >= 2:
-        # Compare current month with previous month
-        current_month = months[-1]
-        previous_month = months[-2]
+    # Income Analysis
+    if total_income > 0:
+        income_df = df[df['type'] == 'Income']
+        income_categories = income_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+        income_categories['percentage'] = (income_categories['sum'] / total_income * 100).round(1)
         
-        # For each category, check if spending increased or decreased
-        for category in categories:
-            current_spend = monthly_data[current_month].get(category, 0)
-            previous_spend = monthly_data[previous_month].get(category, 0)
-            
-            if previous_spend > 0 and current_spend > 0:
-                percent_change = ((current_spend - previous_spend) / previous_spend) * 100
-                
-                if percent_change > 20:
-                    insights.append({
-                        'type': 'increase',
-                        'category': category,
-                        'percent': round(percent_change, 1),
-                        'message': f"Your spending on {category} increased by {round(percent_change, 1)}% compared to last month"
-                    })
-                elif percent_change < -20:
-                    insights.append({
-                        'type': 'decrease',
-                        'category': category,
-                        'percent': round(abs(percent_change), 1),
-                        'message': f"Great job! Your spending on {category} decreased by {round(abs(percent_change), 1)}% compared to last month"
-                    })
-    
-    # If we have total income/expense data
-    if not total_spending.empty:
-        total_expenses = total_spending['total_expenses'].iloc[0] or 0
-        total_income = total_spending['total_income'].iloc[0] or 0
+        income_insights = []
+        for _, row in income_categories.iterrows():
+            income_insights.append(
+                f"• {row['category']}: ₹{row['sum']:,.2f} ({row['percentage']}% of total income)"
+            )
         
-        if total_income > 0:
-            savings_rate = ((total_income - total_expenses) / total_income) * 100
-            
-            if savings_rate < 0:
-                insights.append({
-                    'type': 'warning',
-                    'message': f"Warning: You're spending more than you earn. Consider reducing expenses."
-                })
-            elif savings_rate < 10:
-                insights.append({
-                    'type': 'warning',
-                    'message': f"Your savings rate is {round(savings_rate, 1)}%. Consider saving at least 20% of your income."
-                })
-            elif savings_rate > 30:
-                insights.append({
-                    'type': 'positive',
-                    'message': f"Excellent! Your savings rate is {round(savings_rate, 1)}%, which is above the recommended 20%."
-                })
+        if income_insights:
+            insights.append({
+                'type': 'income_analysis',
+                'title': 'Income Analysis',
+                'details': income_insights
+            })
+    
+    # Expense Analysis
+    expense_df = df[df['type'] == 'Expense']
+    expense_categories = expense_df.groupby('category')['amount'].agg(['sum', 'count']).reset_index()
+    expense_categories['percentage'] = (expense_categories['sum'] / total_expenses * 100).round(1)
+    
+    expense_insights = []
+    for _, row in expense_categories.iterrows():
+        expense_insights.append(
+            f"• {row['category']}: ₹{row['sum']:,.2f} ({row['percentage']}% of total expenses)"
+        )
+    
+    if expense_insights:
+        insights.append({
+            'type': 'expense_analysis',
+            'title': 'Expense Analysis',
+            'details': expense_insights
+        })
+    
+    # Savings Analysis
+    if total_income > 0:
+        savings_insights = []
+        if savings_rate >= 50:
+            savings_insights.append("🌟 Excellent! Your savings rate is above 50%.")
+        elif savings_rate >= 30:
+            savings_insights.append("✅ Good job! Your savings rate is above 30%.")
+        elif savings_rate >= 20:
+            savings_insights.append("👍 Your savings rate is healthy at 20%.")
+        else:
+            savings_insights.append("💡 Consider increasing your savings rate to at least 20% for better financial health.")
+        
+        insights.append({
+            'type': 'savings_analysis',
+            'title': 'Savings Analysis',
+            'details': savings_insights
+        })
+    
+    # Temporal Analysis
+    temporal_patterns = analyze_temporal_patterns(expense_df)
+    if temporal_patterns:
+        insights.append({
+            'type': 'temporal_analysis',
+            'title': 'Time-based Spending Patterns',
+            'details': [pattern['message'] for pattern in temporal_patterns]
+        })
+    
+    # Category-specific Analysis
+    category_insights = []
+    for category in expense_df['category'].unique():
+        cat_data = expense_df[expense_df['category'] == category]
+        avg_amount = cat_data['amount'].mean()
+        total_amount = cat_data['amount'].sum()
+        percentage = (total_amount / total_expenses * 100) if total_expenses > 0 else 0
+        
+        if percentage > 30:
+            category_insights.append(
+                f"⚠️ {category} represents {percentage:.1f}% of your expenses. Consider reviewing spending in this category."
+            )
+    
+    if category_insights:
+        insights.append({
+            'type': 'category_analysis',
+            'title': 'Category-specific Insights',
+            'details': category_insights
+        })
+    
+    # Recommendations
+    recommendations = []
+    
+    # Income-based recommendations
+    if total_income > 0:
+        if savings_rate < 20:
+            recommendations.append({
+                'priority': 'high',
+                'message': "Your savings rate is below 20%. Consider reducing expenses or increasing income.",
+                'action': "Review your largest expense categories and look for areas to cut back."
+            })
+        elif savings_rate > 50:
+            recommendations.append({
+                'priority': 'low',
+                'message': "Excellent savings rate! Consider investing your savings for better returns.",
+                'action': "Look into investment options that match your risk tolerance."
+            })
+    
+    # Expense-based recommendations
+    for category, row in expense_categories.iterrows():
+        if row['percentage'] > 30:
+            recommendations.append({
+                'priority': 'high',
+                'message': f"High spending in {category} category ({row['percentage']:.1f}% of expenses).",
+                'action': f"Review your {category} expenses and look for ways to reduce costs."
+            })
+    
+    if recommendations:
+        insights.append({
+            'type': 'recommendations',
+            'title': 'Personalized Recommendations',
+            'details': recommendations
+        })
     
     return jsonify({
         'insights': insights
     })
+
+def extract_merchant_info(note):
+    """Extract merchant information from transaction notes"""
+    # Common merchant patterns
+    patterns = {
+        'online': r'(amazon|flipkart|myntra|swiggy|zomato)',
+        'retail': r'(store|shop|market|mall)',
+        'food': r'(restaurant|cafe|food|dining)',
+        'transport': r'(uber|ola|metro|bus|train)',
+        'utility': r'(electricity|water|gas|internet)'
+    }
+    
+    merchant_type = 'other'
+    for type_name, pattern in patterns.items():
+        if re.search(pattern, note.lower()):
+            merchant_type = type_name
+            break
+    
+    return {
+        'merchant_type': merchant_type,
+        'is_online': 1 if merchant_type == 'online' else 0
+    }
+
+def analyze_merchant_patterns(df):
+    """Analyze spending patterns by merchant"""
+    merchant_patterns = []
+    
+    # Group by merchant type
+    merchant_stats = df.groupby('merchant_type').agg({
+        'amount': ['count', 'mean', 'sum'],
+        'date': 'nunique'
+    }).round(2)
+    
+    for merchant_type, stats in merchant_stats.iterrows():
+        total_transactions = stats[('amount', 'count')]
+        avg_amount = stats[('amount', 'mean')]
+        total_spent = stats[('amount', 'sum')]
+        unique_days = stats[('date', 'nunique')]
+        
+        # Calculate frequency
+        if unique_days > 0:
+            frequency = total_transactions / unique_days
+        else:
+            frequency = 0
+        
+        pattern = {
+            'merchant_type': merchant_type,
+            'total_transactions': total_transactions,
+            'avg_amount': avg_amount,
+            'total_spent': total_spent,
+            'frequency': frequency,
+            'unique_days': unique_days
+        }
+        
+        # Add risk assessment
+        if frequency > 1.5:  # More than 1.5 transactions per day on average
+            pattern['risk_level'] = 'high'
+            pattern['message'] = f"Frequent spending at {merchant_type} merchants: {frequency:.1f} transactions per day"
+        elif frequency > 0.5:  # More than 0.5 transactions per day on average
+            pattern['risk_level'] = 'medium'
+            pattern['message'] = f"Regular spending at {merchant_type} merchants: {frequency:.1f} transactions per day"
+        else:
+            pattern['risk_level'] = 'low'
+            pattern['message'] = f"Occasional spending at {merchant_type} merchants: {frequency:.1f} transactions per day"
+        
+        merchant_patterns.append(pattern)
+    
+    return merchant_patterns
+
+def analyze_temporal_patterns(df):
+    """Analyze spending patterns by time"""
+    temporal_patterns = []
+    
+    # Convert to datetime
+    df['date'] = pd.to_datetime(df['date'])
+    df['hour'] = pd.to_numeric(df['hour_of_day'])
+    df['day_of_week'] = pd.to_numeric(df['day_of_week'])
+    
+    # Time of day analysis
+    time_slots = {
+        'morning': (6, 12),
+        'afternoon': (12, 18),
+        'evening': (18, 22),
+        'night': (22, 6)
+    }
+    
+    for slot_name, (start_hour, end_hour) in time_slots.items():
+        if start_hour < end_hour:
+            slot_data = df[(df['hour'] >= start_hour) & (df['hour'] < end_hour)]
+        else:  # Handle overnight slot
+            slot_data = df[(df['hour'] >= start_hour) | (df['hour'] < end_hour)]
+        
+        if len(slot_data) > 0:
+            avg_amount = slot_data['amount'].mean()
+            total_spent = slot_data['amount'].sum()
+            transaction_count = len(slot_data)
+            
+            pattern = {
+                'time_slot': slot_name,
+                'avg_amount': avg_amount,
+                'total_spent': total_spent,
+                'transaction_count': transaction_count
+            }
+            
+            # Add insights
+            if avg_amount > df['amount'].mean() * 1.2:
+                pattern['message'] = f"Higher than average spending during {slot_name}: ₹{avg_amount:,.2f} per transaction"
+            elif avg_amount < df['amount'].mean() * 0.8:
+                pattern['message'] = f"Lower than average spending during {slot_name}: ₹{avg_amount:,.2f} per transaction"
+            else:
+                pattern['message'] = f"Typical spending during {slot_name}: ₹{avg_amount:,.2f} per transaction"
+            
+            temporal_patterns.append(pattern)
+    
+    return temporal_patterns
+
+def analyze_spending_patterns(df):
+    """Analyze spending patterns using clustering"""
+    patterns = []
+    
+    # Prepare features for clustering
+    features = df.groupby('date').agg({
+        'amount': ['sum', 'count', 'mean', 'std']
+    }).fillna(0)
+    
+    features.columns = ['daily_total', 'transaction_count', 'avg_amount', 'amount_std']
+    
+    if len(features) < 5:  # Need enough data points for meaningful clustering
+        return patterns
+    
+    # Scale features
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(features)
+    
+    # K-means clustering
+    kmeans = KMeans(n_clusters=min(3, len(features)), random_state=42)
+    clusters = kmeans.fit_predict(scaled_features)
+    
+    # Analyze each cluster
+    for cluster_id in range(kmeans.n_clusters):
+        cluster_days = features[clusters == cluster_id]
+        if len(cluster_days) > 0:
+            pattern = {
+                'type': 'cluster',
+                'cluster_id': cluster_id,
+                'days_count': len(cluster_days),
+                'avg_daily_spend': cluster_days['daily_total'].mean(),
+                'avg_transactions': cluster_days['transaction_count'].mean(),
+                'avg_amount': cluster_days['avg_amount'].mean()
+            }
+            
+            # Determine pattern type
+            if pattern['avg_transactions'] > features['transaction_count'].mean() * 1.2:
+                pattern['pattern_type'] = 'frequent_small'
+                pattern['message'] = f"Frequent small purchases pattern: {len(cluster_days)} days with average {pattern['avg_transactions']:.1f} transactions per day"
+            elif pattern['avg_amount'] > features['avg_amount'].mean() * 1.5:
+                pattern['pattern_type'] = 'occasional_large'
+                pattern['message'] = f"Occasional large purchases pattern: {len(cluster_days)} days with average transaction of ₹{pattern['avg_amount']:,.2f}"
+            else:
+                pattern['pattern_type'] = 'regular'
+                pattern['message'] = f"Regular spending pattern: {len(cluster_days)} days with average daily spend of ₹{pattern['avg_daily_spend']:,.2f}"
+            
+            patterns.append(pattern)
+    
+    return patterns
+
+def train_category_models(df):
+    """Train regression models for each spending category"""
+    category_models = {}
+    
+    for category in df['category'].unique():
+        cat_data = df[df['category'] == category].copy()
+        if len(cat_data) < 10:  # Need enough data points
+            continue
+        
+        # Prepare features
+        cat_data['month'] = pd.to_datetime(cat_data['date']).dt.month
+        cat_data['day_of_week'] = pd.to_numeric(cat_data['day_of_week'])
+        cat_data['hour_of_day'] = pd.to_numeric(cat_data['hour_of_day'])
+        
+        X = cat_data[['month', 'day_of_week', 'hour_of_day']]
+        y = cat_data['amount']
+        
+        # Train model
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        category_models[category] = {
+            'model': model,
+            'avg_amount': y.mean(),
+            'std_amount': y.std()
+        }
+    
+    return category_models
+
+def predict_category_spending(category_models, category, features):
+    """Predict expected spending for a category"""
+    if category not in category_models:
+        return None
+    
+    model_info = category_models[category]
+    predicted = model_info['model'].predict([features])[0]
+    
+    return {
+        'predicted': predicted,
+        'avg_amount': model_info['avg_amount'],
+        'std_amount': model_info['std_amount']
+    }
 
 if __name__ == '__main__':
     app.run(debug=True)
