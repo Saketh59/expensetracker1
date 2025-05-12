@@ -425,11 +425,14 @@ def add_transaction():
         return jsonify({'error': 'Not logged in'}), 401
 
     app.logger.info(f"[add_transaction] user_id={session['user_id']} Received transaction data: {request.form}")
+    print("request.form:  ",request.form)
 
     try:
         # Get and validate required fields
         txn_type = request.form.get('type')
+        print("type: ",txn_type)
         amount = request.form.get('amount')
+        print("amount:",amount)
         note = request.form.get('note', '')
         mode = request.form.get('mode', 'manual')
 

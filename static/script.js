@@ -1213,6 +1213,97 @@ async function handleCSVUpload() {
     }
 }
 
+
+
+
+
+
+
+
+async function handleManualEntry(e) {
+    e.preventDefault();
+
+    const type = document.getElementById('type').value;
+    const amount = document.getElementById('amount').value;
+    const note = document.getElementById('note')?.value || '';
+    const categoryField = document.getElementById('category');
+    const subcategoryField = document.getElementById('subcategory');
+
+    // Toggle required attribute for category based on type
+    if (type === 'Income') {
+        categoryField.removeAttribute('required');
+    } else {
+        categoryField.setAttribute('required', 'true');
+    }
+
+    // Basic validation
+    if (!type || !amount || (type === 'Expense' && !categoryField.value)) {
+        showUploadStatus('Please fill in all required fields.', 'warning');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('type', type);
+    formData.append('amount', amount);
+    formData.append('note', note);
+
+    if (type === 'Income') {
+        formData.append('category', 'Income');
+        formData.append('subcategory', '');
+    } else {
+        formData.append('category', categoryField.value);
+        formData.append('subcategory', subcategoryField.value || '');
+    }
+
+    formData.append('mode', 'Cash');
+
+    try {
+        const transactionData = {
+            type,
+            amount,
+            note,
+            category: type === 'Income' ? 'Income' : categoryField.value,
+            subcategory: type === 'Income' ? '' : subcategoryField.value,
+            mode: 'Cash'
+        };
+        console.log('Sending transaction data:', transactionData);
+
+        const response = await fetch('/add_transaction', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+        console.log('Server response:', data);
+
+        if (response.ok) {
+            document.getElementById('manual-entry-form').reset();
+            await updateDashboard();
+
+            let message = 'Transaction added successfully!';
+            if (data.totals) {
+                message += `\nCurrent Totals:\nIncome: ₹${data.totals.income.toFixed(2)}\nExpenses: ₹${data.totals.expenses.toFixed(2)}\nNet Savings: ₹${data.totals.savings.toFixed(2)}`;
+            }
+            showUploadStatus(message, 'success');
+            getBudgetAdvice();
+        } else {
+            showUploadStatus(`Error: ${data.error || 'Failed to add transaction'}`, 'danger');
+        }
+    } catch (error) {
+        console.error('Error adding transaction:', error);
+        showUploadStatus('Error: Failed to add transaction. Please try again.', 'danger');
+    }
+}
+
+// Attach the form submit listener after DOM load
+document.addEventListener('DOMContentLoaded', () => {
+    const manualForm = document.getElementById('manual-entry-form');
+    if (manualForm) {
+        manualForm.addEventListener('submit', handleManualEntry);
+    }
+});
+
+
 // Function to show upload status with appropriate styling
 function showUploadStatus(message, type) {
     const statusElement = document.getElementById('uploadStatus');
@@ -1231,50 +1322,59 @@ function showUploadStatus(message, type) {
 }
 
 // Function to handle manual transaction entry
+document.addEventListener('DOMContentLoaded', () => {
+    const manualForm = document.getElementById('manual-entry-form');
+    const typeField = document.getElementById('type');
+    const categoryField = document.getElementById('category');
+
+    // Ensure the category field is only required when "Expense" is selected
+    typeField.addEventListener('change', () => {
+        if (typeField.value === 'Income') {
+            categoryField.removeAttribute('required');
+        } else {
+            categoryField.setAttribute('required', 'true');
+        }
+    });
+
+    manualForm.addEventListener('submit', handleManualEntry);
+});
+
 async function handleManualEntry(e) {
     e.preventDefault();
-    
+
     const type = document.getElementById('type').value;
     const amount = document.getElementById('amount').value;
     const note = document.getElementById('note')?.value || '';
-    
-    if (!type || !amount) {
+    const categoryField = document.getElementById('category');
+    const subcategoryField = document.getElementById('subcategory');
+
+    // Basic form validation
+    if (!type || !amount || (type !== 'Income' && !categoryField.value)) {
         showUploadStatus('Please fill in all required fields', 'warning');
         return;
     }
-    
+
     const formData = new FormData();
     formData.append('type', type);
     formData.append('amount', amount);
     formData.append('note', note);
-    
-    // For income transactions, use default category
+
     if (type === 'Income') {
         formData.append('category', 'Income');
         formData.append('subcategory', '');
         formData.append('mode', 'Cash');
     } else {
-        // For expenses, require category
-        const category = document.getElementById('category').value;
-        const subcategory = document.getElementById('subcategory').value;
-        
-        if (!category) {
-            showUploadStatus('Please enter a category for expense', 'warning');
-            return;
-        }
-        
-        formData.append('category', category);
-        formData.append('subcategory', subcategory);
+        formData.append('category', categoryField.value);
+        formData.append('subcategory', subcategoryField.value);
         formData.append('mode', 'Cash');
     }
-    
+
     try {
-        // Log the transaction data being sent
         const transactionData = {
-            type: type,
-            amount: amount,
-            note: note,
-            category: type === 'Income' ? 'Income' : document.getElementById('category').value,
+            type,
+            amount,
+            note,
+            category: type === 'Income' ? 'Income' : categoryField.value,
             mode: 'Cash'
         };
         console.log('Sending transaction data:', transactionData);
@@ -1283,25 +1383,19 @@ async function handleManualEntry(e) {
             method: 'POST',
             body: formData
         });
-        
+
         const data = await response.json();
         console.log('Server response:', data);
-        
+
         if (response.ok) {
-            // Clear the form
             document.getElementById('manual-entry-form').reset();
-            
-            // Update the entire dashboard
             await updateDashboard();
-            
-            // Show success message with updated totals
+
             let message = 'Transaction added successfully!';
             if (data.totals) {
                 message += `\nCurrent Totals:\nIncome: ₹${data.totals.income.toFixed(2)}\nExpenses: ₹${data.totals.expenses.toFixed(2)}\nNet Savings: ₹${data.totals.savings.toFixed(2)}`;
             }
             showUploadStatus(message, 'success');
-            
-            // Update budget advice immediately
             getBudgetAdvice();
         } else {
             showUploadStatus(`Error: ${data.error || 'Failed to add transaction'}`, 'danger');
@@ -1311,6 +1405,9 @@ async function handleManualEntry(e) {
         showUploadStatus('Error: Failed to add transaction. Please try again.', 'danger');
     }
 }
+
+
+
 
 // Function to display imported transactions
 function displayImportedTransactions(transactions) {
