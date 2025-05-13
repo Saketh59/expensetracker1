@@ -545,6 +545,191 @@ def add_transaction():
         app.logger.error(f"Unexpected error in add_transaction: {str(e)}")
         return jsonify({'error': 'An unexpected error occurred'}), 500
 
+# @app.route('/upload_csv', methods=['POST'])
+# def upload_csv():
+#     if 'user_id' not in session:
+#         return jsonify({'error': 'Not logged in'}), 401
+        
+#     if 'file' not in request.files:
+#         return jsonify({'error': 'No file uploaded'}), 400
+        
+#     file = request.files['file']
+#     if file.filename == '':
+#         return jsonify({'error': 'No file selected'}), 400
+        
+#     if not file.filename.endswith('.csv'):
+#         return jsonify({'error': 'Please upload a CSV file'}), 400
+    
+#     conn = None
+#     try:
+#         # Read the CSV file
+#         stream = TextIOWrapper(file.stream, encoding='utf-8-sig')
+#         csv_reader = csv.DictReader(stream)
+        
+#         # Validate required columns
+#         required_columns = {'category', 'amount', 'type'}
+#         if not all(col in csv_reader.fieldnames for col in required_columns):
+#             missing = required_columns - set(csv_reader.fieldnames)
+#             return jsonify({'error': f'CSV missing required columns: {", ".join(missing)}'}), 400
+        
+#         # Store all valid transactions first
+#         valid_transactions = []
+#         errors = []
+#         income_total = 0
+#         expense_total = 0
+        
+#         for row_num, row in enumerate(csv_reader, 1):
+#             try:
+#                 # Validate category
+#                 category = row['category'].strip()
+#                 if not category:
+#                     errors.append(f"Row {row_num}: Empty category")
+#                     continue
+                
+#                 # Validate amount
+#                 try:
+#                     amount = float(str(row['amount']).replace(',', '').replace('₹', '').strip())
+#                     if amount <= 0:
+#                         errors.append(f"Row {row_num}: Amount must be positive")
+#                         continue
+#                 except (ValueError, TypeError):
+#                     errors.append(f"Row {row_num}: Invalid amount '{row['amount']}'")
+#                     continue
+                
+#                 # Get optional fields
+#                 description = row.get('description', '').strip()
+#                 date_str = row.get('date', datetime.now().strftime('%Y-%m-%d'))
+                
+#                 # Validate transaction type
+#                 transaction_type = row.get('type', 'Expense').strip().title()
+#                 if transaction_type not in ['Income', 'Expense']:
+#                     errors.append(f"Row {row_num}: Invalid type '{transaction_type}', using 'Expense'")
+#                     transaction_type = 'Expense'
+                
+#                 # Update totals
+#                 if transaction_type == 'Income':
+#                     income_total += amount
+#                 else:
+#                     expense_total += amount
+                
+#                 # Store valid transaction
+#                 valid_transactions.append({
+#                     'type': transaction_type,
+#                     'category': category,
+#                     'amount': amount,
+#                     'description': description,
+#                     'date': date_str
+#                 })
+                
+#             except Exception as e:
+#                 errors.append(f"Row {row_num}: {str(e)}")
+#                 continue
+        
+#         if not valid_transactions:
+#             error_msg = "No valid transactions found in the CSV file"
+#             if errors:
+#                 error_msg += f". Errors: {'; '.join(errors)}"
+#             return jsonify({'error': error_msg}), 400
+        
+#         # Now process valid transactions in database
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+        
+#         # Clear existing transactions
+#         cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
+        
+#         # Group transactions by category
+#         transactions_by_category = defaultdict(list)
+        
+#         # Insert transactions and group them
+#         for transaction in valid_transactions:
+#             cursor.execute('''
+#                 INSERT INTO transactions (
+#                     user_id, type, category, amount, note, date
+#                 ) VALUES (?, ?, ?, ?, ?, ?)
+#             ''', (
+#                 session['user_id'],
+#                 transaction['type'],
+#                 transaction['category'],
+#                 transaction['amount'],
+#                 transaction['description'],
+#                 transaction['date']
+#             ))
+            
+#             category_key = f"{transaction['type']}_{transaction['category']}"
+#             transactions_by_category[category_key].append(transaction)
+        
+#         # Commit the changes
+#         conn.commit()
+        
+#         # Calculate net savings
+#         net_savings = income_total - expense_total
+#         savings_rate = (net_savings / income_total * 100) if income_total > 0 else 0
+        
+#         # Get category summary with top transactions
+#         category_summary = {}
+        
+#         # Get category totals from database
+#         cursor.execute('''
+#             SELECT type, category, COUNT(*) as count, SUM(amount) as total
+#             FROM transactions 
+#             WHERE user_id = ?
+#             GROUP BY type, category
+#         ''', (session['user_id'],))
+        
+#         categories = cursor.fetchall()
+        
+#         # Process each category
+#         for cat in categories:
+#             category_key = f"{cat['type']}_{cat['category']}"
+            
+#             # Get top 3 transactions for this category
+#             top_transactions = sorted(
+#                 transactions_by_category[category_key],
+#                 key=lambda x: x['amount'],
+#                 reverse=True
+#             )[:3]
+            
+#             # Format amounts in top transactions
+#             formatted_top_transactions = []
+#             for txn in top_transactions:
+#                 formatted_txn = txn.copy()
+#                 formatted_txn['amount'] = float(formatted_txn['amount'])
+#                 formatted_top_transactions.append(formatted_txn)
+            
+#             category_summary[category_key] = {
+#                 'type': cat['type'],
+#                 'category': cat['category'],
+#                 'count': cat['count'],
+#                 'total': float(cat['total']),
+#                 'top_transactions': formatted_top_transactions
+#             }
+        
+#         response = {
+#             'message': f'Successfully imported {len(valid_transactions)} transactions',
+#             'summary': {
+#                 'total_income': float(income_total),
+#                 'total_expenses': float(expense_total),
+#                 'net_savings': float(net_savings),
+#                 'savings_rate': float(savings_rate)
+#             },
+#             'category_breakdown': category_summary
+#         }
+        
+#         if errors:
+#             response['warnings'] = errors
+        
+#         return jsonify(response)
+        
+#     except Exception as e:
+#         app.logger.error(f"Error processing CSV: {str(e)}")
+#         if conn:
+#             conn.rollback()
+#         return jsonify({'error': f'Error processing CSV file: {str(e)}'}), 500
+        
+#     finally:
+#         if conn:
+#             conn.close()
 @app.route('/upload_csv', methods=['POST'])
 def upload_csv():
     if 'user_id' not in session:
@@ -560,60 +745,51 @@ def upload_csv():
     if not file.filename.endswith('.csv'):
         return jsonify({'error': 'Please upload a CSV file'}), 400
     
+    conn = None
     try:
         # Read the CSV file
         stream = TextIOWrapper(file.stream, encoding='utf-8-sig')
         csv_reader = csv.DictReader(stream)
         
-        # Log the headers for debugging
-        app.logger.info(f"CSV Headers: {csv_reader.fieldnames}")
-        
         # Validate required columns
-        required_columns = {'category', 'amount', 'type'}  # Added 'type' as required
+        required_columns = {'category', 'amount', 'type'}
         if not all(col in csv_reader.fieldnames for col in required_columns):
             missing = required_columns - set(csv_reader.fieldnames)
             return jsonify({'error': f'CSV missing required columns: {", ".join(missing)}'}), 400
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Clear existing transactions for this user
-        cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
-        conn.commit()
-        
-        # Process transactions
-        imported_transactions = []
-        row_count = 0
+        # Store all valid transactions first
+        valid_transactions = []
         errors = []
         income_total = 0
         expense_total = 0
         
         for row_num, row in enumerate(csv_reader, 1):
             try:
-                # Validate and clean data
+                # Validate category
                 category = row['category'].strip()
                 if not category:
                     errors.append(f"Row {row_num}: Empty category")
                     continue
-                    
+                
+                # Validate amount
                 try:
                     amount = float(str(row['amount']).replace(',', '').replace('₹', '').strip())
+                    if amount <= 0:
+                        errors.append(f"Row {row_num}: Amount must be positive")
+                        continue
                 except (ValueError, TypeError):
                     errors.append(f"Row {row_num}: Invalid amount '{row['amount']}'")
                     continue
                 
-                # Get optional fields with defaults
+                # Get optional fields
                 description = row.get('description', '').strip()
                 date_str = row.get('date', datetime.now().strftime('%Y-%m-%d'))
                 
-                # Handle transaction type
+                # Validate transaction type
                 transaction_type = row.get('type', 'Expense').strip().title()
                 if transaction_type not in ['Income', 'Expense']:
-                    errors.append(f"Row {row_num}: Invalid transaction type '{transaction_type}', using default 'Expense'")
+                    errors.append(f"Row {row_num}: Invalid type '{transaction_type}', using 'Expense'")
                     transaction_type = 'Expense'
-                
-                # Ensure amount is positive
-                amount = abs(amount)
                 
                 # Update totals
                 if transaction_type == 'Income':
@@ -621,84 +797,118 @@ def upload_csv():
                 else:
                     expense_total += amount
                 
-                try:
-                    # Insert transaction
-                    cursor.execute('''
-                        INSERT INTO transactions (user_id, type, category, amount, note, date)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (session['user_id'], transaction_type, category, amount, description, date_str))
-                    
-                    imported_transactions.append({
-                        'type': transaction_type,
-                        'category': category,
-                        'amount': amount,
-                        'description': description,
-                        'date': date_str
-                    })
-                    row_count += 1
-                except sqlite3.IntegrityError as e:
-                    errors.append(f"Row {row_num}: Database error - {str(e)}")
-                    continue
+                # Store valid transaction
+                valid_transactions.append({
+                    'type': transaction_type,
+                    'category': category,
+                    'amount': amount,
+                    'description': description,
+                    'date': date_str
+                })
                 
             except Exception as e:
-                app.logger.error(f"Error processing row {row_num}: {str(e)}")
                 errors.append(f"Row {row_num}: {str(e)}")
                 continue
         
-        conn.commit()
-        
-        if row_count == 0:
+        if not valid_transactions:
             error_msg = "No valid transactions found in the CSV file"
             if errors:
                 error_msg += f". Errors: {'; '.join(errors)}"
             return jsonify({'error': error_msg}), 400
         
+        # Now process valid transactions in database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Clear existing transactions
+        cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
+        
+        # Group transactions by category and type
+        transactions_by_category = defaultdict(list)
+        
+        # Insert transactions and group them
+        for transaction in valid_transactions:
+            cursor.execute('''
+                INSERT INTO transactions (
+                    user_id, type, category, amount, note, date
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                session['user_id'],
+                transaction['type'],
+                transaction['category'],
+                transaction['amount'],
+                transaction['description'],
+                transaction['date']
+            ))
+            
+            category_key = f"{transaction['type']}_{transaction['category']}"
+            transactions_by_category[category_key].append(transaction)
+        
+        # Commit the changes
+        conn.commit()
+        
         # Calculate net savings
         net_savings = income_total - expense_total
         savings_rate = (net_savings / income_total * 100) if income_total > 0 else 0
         
-        # Get category-wise breakdown
-        category_transactions = {}
-        cursor.execute('''
-            SELECT type, category, COUNT(*) as count, SUM(amount) as total
-            FROM transactions 
-            WHERE user_id = ?
-            GROUP BY type, category
-        ''', (session['user_id'],))
-        categories = cursor.fetchall()
+        # Get category summary with top transactions
+        category_summary = {}
         
-        for cat in categories:
-            key = f"{cat['type']}_{cat['category']}"
-            category_transactions[key] = {
-                'type': cat['type'],
-                'category': cat['category'],
-                'count': cat['count'],
-                'total': float(cat['total'])
+        # Process each category group
+        for category_key, transactions in transactions_by_category.items():
+            # Parse category key to get type and category
+            type_name, category_name = category_key.split('_', 1)
+            
+            # Get top 3 transactions for this category (sorted by amount descending)
+            top_transactions = sorted(
+                transactions,
+                key=lambda x: x['amount'],
+                reverse=True
+            )[:3]
+            
+            # Format amounts in top transactions
+            formatted_top_transactions = []
+            for txn in top_transactions:
+                formatted_txn = txn.copy()
+                formatted_txn['amount'] = float(formatted_txn['amount'])
+                formatted_top_transactions.append(formatted_txn)
+            
+            # Calculate category totals
+            total_amount = sum(t['amount'] for t in transactions)
+            transaction_count = len(transactions)
+            
+            category_summary[category_key] = {
+                'type': type_name,
+                'category': category_name,
+                'count': transaction_count,
+                'total': float(total_amount),
+                'top_transactions': formatted_top_transactions
             }
         
         response = {
-            'message': f'Successfully imported {row_count} transactions',
+            'message': f'Successfully imported {len(valid_transactions)} transactions',
             'summary': {
-                'total_income': income_total,
-                'total_expenses': expense_total,
-                'net_savings': net_savings,
-                'savings_rate': savings_rate
+                'total_income': float(income_total),
+                'total_expenses': float(expense_total),
+                'net_savings': float(net_savings),
+                'savings_rate': float(savings_rate)
             },
-            'transactions': imported_transactions[:5],  # Return first 5 transactions as preview
-            'category_breakdown': category_transactions
+            'category_breakdown': category_summary
         }
         
         if errors:
             response['warnings'] = errors
-            
+        
         return jsonify(response)
         
     except Exception as e:
         app.logger.error(f"Error processing CSV: {str(e)}")
+        if conn:
+            conn.rollback()
         return jsonify({'error': f'Error processing CSV file: {str(e)}'}), 500
         
     finally:
-        if 'conn' in locals():
+        if conn:
             conn.close()
 
 @app.route('/clear_transactions', methods=['POST'])

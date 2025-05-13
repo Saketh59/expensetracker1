@@ -1145,53 +1145,8 @@ async function handleCSVUpload() {
         if (response.ok) {
             showUploadStatus(result.message, 'success');
             
-            // Display category-wise transactions
-            const previewContainer = document.getElementById('csvPreviewContainer');
-            if (previewContainer && result.category_transactions) {
-                let previewHTML = '<div class="category-transactions">';
-                
-                for (const [category, transactions] of Object.entries(result.category_transactions)) {
-                    previewHTML += `
-                        <div class="category-section">
-                            <h4>${category}</h4>
-                            <div class="table-responsive">
-                                <table class="table table-sm table-bordered">
-                                    <thead>
-                                        <tr>
-                                            <th>Type</th>
-                                            <th>Amount</th>
-                                            <th>Date</th>
-                                            <th>Note</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                    `;
-                    
-                    transactions.forEach(txn => {
-                        const amountClass = txn.type.toLowerCase() === 'income' ? 'income' : 'expense';
-                        const amountSign = txn.type.toLowerCase() === 'income' ? '+' : '-';
-                        previewHTML += `
-                            <tr>
-                                <td>${txn.type}</td>
-                                <td class="${amountClass}">${amountSign}₹${txn.amount.toFixed(2)}</td>
-                                <td>${formatDate(txn.date)}</td>
-                                <td>${txn.note || ''}</td>
-                            </tr>
-                        `;
-                    });
-                    
-                    previewHTML += `
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    `;
-                }
-                
-                previewHTML += '</div>';
-                previewContainer.innerHTML = previewHTML;
-                previewContainer.style.display = 'block';
-            }
+            // Display category breakdown with top transactions
+            displayCategoryBreakdown(result.category_breakdown);
             
             // Update the entire dashboard
             await updateDashboard();
@@ -1213,12 +1168,122 @@ async function handleCSVUpload() {
     }
 }
 
+// Function to display category breakdown with top transactions
+function displayCategoryBreakdown(categoryBreakdown) {
+    const previewContainer = document.getElementById('csvPreviewContainer');
+    if (!previewContainer) return;
 
+    let html = '<h3>Category Breakdown</h3>';
 
+    // Sort categories by type (Income first, then Expenses)
+    const sortedCategories = Object.entries(categoryBreakdown).sort((a, b) => {
+        if (a[1].type === b[1].type) return 0;
+        return a[1].type === 'Income' ? -1 : 1;
+    });
 
+    // Group by type
+    const groupedCategories = {
+        Income: [],
+        Expense: []
+    };
 
+    sortedCategories.forEach(([key, data]) => {
+        groupedCategories[data.type].push({ key, ...data });
+    });
 
+    // Display Income categories first
+    if (groupedCategories.Income.length > 0) {
+        html += '<div class="category-group income-group">';
+        html += '<h4 class="type-header">Income Categories</h4>';
+        groupedCategories.Income.forEach(category => {
+            html += createCategorySection(category);
+        });
+        html += '</div>';
+    }
 
+    // Then display Expense categories
+    if (groupedCategories.Expense.length > 0) {
+        html += '<div class="category-group expense-group">';
+        html += '<h4 class="type-header">Expense Categories</h4>';
+        groupedCategories.Expense.forEach(category => {
+            html += createCategorySection(category);
+        });
+        html += '</div>';
+    }
+
+    previewContainer.innerHTML = html;
+    previewContainer.style.display = 'block';
+}
+
+// Helper function to create a category section with its top transactions
+function createCategorySection(categoryData) {
+    const { category, type, count, total, top_transactions } = categoryData;
+    
+    let html = `
+        <div class="category-section ${type.toLowerCase()}-section">
+            <h5 class="category-header">${category}</h5>
+            <div class="category-summary">
+                <p>Total Transactions: ${count}</p>
+                <p>Total Amount: ₹${parseFloat(total).toFixed(2)}</p>
+            </div>
+    `;
+
+    if (top_transactions && top_transactions.length > 0) {
+        html += `
+            <div class="top-transactions">
+                <h6>Top 3 Transactions</h6>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Amount</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+
+        top_transactions.forEach(txn => {
+            const amountClass = type.toLowerCase() === 'income' ? 'text-success' : 'text-danger';
+            const amountSign = type.toLowerCase() === 'income' ? '+' : '-';
+            const formattedDate = formatDate(txn.date);
+            
+            html += `
+                <tr>
+                    <td>${formattedDate}</td>
+                    <td class="${amountClass}">${amountSign}₹${parseFloat(txn.amount).toFixed(2)}</td>
+                    <td>${txn.description || 'No description'}</td>
+                </tr>
+            `;
+        });
+
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        `;
+    }
+
+    html += '</div>';
+    return html;
+}
+
+// Helper function to format date
+function formatDate(dateString) {
+    if (!dateString) return "N/A";
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleDateString('en-IN', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+        });
+    } catch (e) {
+        return dateString;
+    }
+}
 
 async function handleManualEntry(e) {
     e.preventDefault();
@@ -1263,7 +1328,6 @@ async function handleManualEntry(e) {
             amount,
             note,
             category: type === 'Income' ? 'Income' : categoryField.value,
-            subcategory: type === 'Income' ? '' : subcategoryField.value,
             mode: 'Cash'
         };
         console.log('Sending transaction data:', transactionData);
@@ -1303,7 +1367,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-
 // Function to show upload status with appropriate styling
 function showUploadStatus(message, type) {
     const statusElement = document.getElementById('uploadStatus');
@@ -1339,138 +1402,7 @@ document.addEventListener('DOMContentLoaded', () => {
     manualForm.addEventListener('submit', handleManualEntry);
 });
 
-async function handleManualEntry(e) {
-    e.preventDefault();
-
-    const type = document.getElementById('type').value;
-    const amount = document.getElementById('amount').value;
-    const note = document.getElementById('note')?.value || '';
-    const categoryField = document.getElementById('category');
-    const subcategoryField = document.getElementById('subcategory');
-
-    // Basic form validation
-    if (!type || !amount || (type !== 'Income' && !categoryField.value)) {
-        showUploadStatus('Please fill in all required fields', 'warning');
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append('type', type);
-    formData.append('amount', amount);
-    formData.append('note', note);
-
-    if (type === 'Income') {
-        formData.append('category', 'Income');
-        formData.append('subcategory', '');
-        formData.append('mode', 'Cash');
-    } else {
-        formData.append('category', categoryField.value);
-        formData.append('subcategory', subcategoryField.value);
-        formData.append('mode', 'Cash');
-    }
-
-    try {
-        const transactionData = {
-            type,
-            amount,
-            note,
-            category: type === 'Income' ? 'Income' : categoryField.value,
-            mode: 'Cash'
-        };
-        console.log('Sending transaction data:', transactionData);
-
-        const response = await fetch('/add_transaction', {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await response.json();
-        console.log('Server response:', data);
-
-        if (response.ok) {
-            document.getElementById('manual-entry-form').reset();
-            await updateDashboard();
-
-            let message = 'Transaction added successfully!';
-            if (data.totals) {
-                message += `\nCurrent Totals:\nIncome: ₹${data.totals.income.toFixed(2)}\nExpenses: ₹${data.totals.expenses.toFixed(2)}\nNet Savings: ₹${data.totals.savings.toFixed(2)}`;
-            }
-            showUploadStatus(message, 'success');
-            getBudgetAdvice();
-        } else {
-            showUploadStatus(`Error: ${data.error || 'Failed to add transaction'}`, 'danger');
-        }
-    } catch (error) {
-        console.error('Error adding transaction:', error);
-        showUploadStatus('Error: Failed to add transaction. Please try again.', 'danger');
-    }
-}
-
-
-
-
-// Function to display imported transactions
-function displayImportedTransactions(transactions) {
-    // Get the transactions table body
-    const tbody = document.querySelector('#transactionsTable tbody');
-    if (!tbody) return;
-    
-    // Clear loading indicator if present
-    const loadingRow = document.getElementById('loadingRow');
-    if (loadingRow) {
-        loadingRow.remove();
-    }
-    
-    // If table is empty, clear any "no transactions" message
-    if (tbody.innerText.includes('No transactions found')) {
-        tbody.innerHTML = '';
-    }
-    
-    // Add each transaction to the table
-    transactions.forEach(txn => {
-        // Create new row at the top of the table
-        const newRow = tbody.insertRow(0);
-        
-        // Format the date
-        let formattedDate = txn.date;
-        try {
-            // Try to parse and format the date (assuming ISO format)
-            const date = new Date(txn.date);
-            formattedDate = date.toLocaleDateString();
-        } catch (e) {
-            console.log('Could not format date:', e);
-        }
-        
-        // Apply the appropriate class based on transaction type
-        const amountClass = txn.type.toLowerCase() === 'income' ? 'income' : 'expense';
-        
-        // Format the amount with appropriate sign
-        const formattedAmount = txn.type.toLowerCase() === 'income' 
-            ? `+₹${parseFloat(txn.amount).toFixed(2)}`
-            : `-₹${parseFloat(txn.amount).toFixed(2)}`;
-        
-        // Set row HTML
-        newRow.innerHTML = `
-            <td>${txn.type}</td>
-            <td>${txn.category}</td>
-            <td>${txn.subcategory || ''}</td>
-            <td>${txn.note || ''}</td>
-            <td class="${amountClass}">${formattedAmount}</td>
-            <td>${formattedDate}</td>
-        `;
-        
-        // Add a highlight effect to new rows
-        newRow.classList.add('highlight-new');
-        setTimeout(() => {
-            newRow.classList.remove('highlight-new');
-        }, 3000);
-    });
-    
-    // Update any counters or totals
-    updateTransactionStats();
-}
-
-// Load user info
+// Function to load user info
 async function loadUserInfo() {
     try {
         const response = await fetch("/user_info");
