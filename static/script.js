@@ -1711,15 +1711,7 @@ async function handleCategoryChange(category) {
         // Get the necessary DOM elements
         const categoryAdviceSection = document.getElementById('categoryAdvice');
         const mainTransactionsSection = document.getElementById('mainTransactionsSection');
-        const filterCategory = document.getElementById('filterCategory');
         
-        // Ensure the category dropdown is always visible and interactive
-        if (filterCategory) {
-            filterCategory.style.display = 'block';
-            filterCategory.style.pointerEvents = 'auto';
-            filterCategory.value = category || 'all';
-        }
-
         if (!category || category === 'all') {
             if (categoryAdviceSection) {
                 categoryAdviceSection.style.display = 'none';
@@ -1727,9 +1719,14 @@ async function handleCategoryChange(category) {
             if (mainTransactionsSection) {
                 mainTransactionsSection.style.display = 'block';
             }
-            // Load all transactions
             await loadTransactions();
             return;
+        }
+
+        // Show loading state
+        if (categoryAdviceSection) {
+            categoryAdviceSection.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div><p>Loading category analysis...</p></div>';
+            categoryAdviceSection.style.display = 'block';
         }
 
         // Get category advice
@@ -1740,20 +1737,17 @@ async function handleCategoryChange(category) {
             throw new Error(adviceData.error || 'Failed to get category advice');
         }
 
-        // Calculate percentage based on category-specific threshold from the backend
-        const percentageUsed = adviceData.current_spent > 0 && adviceData.threshold > 0 
-            ? ((adviceData.current_spent / adviceData.threshold) * 100).toFixed(1)
+        // Calculate budget usage percentage based on current spending vs threshold
+        const budgetUsagePercentage = adviceData.threshold > 0 
+            ? ((adviceData.current_spent / adviceData.threshold) * 100).toFixed(1) 
             : 0;
-        
+
+        // Get category-specific thresholds
         const warningThreshold = adviceData.warning_threshold || 75;
         const criticalThreshold = adviceData.critical_threshold || 90;
-        
-        // Update the advice section
+
+        // Update category advice section
         if (categoryAdviceSection) {
-            // Ensure the advice section doesn't overlap with the dropdown
-            categoryAdviceSection.style.position = 'relative';
-            categoryAdviceSection.style.zIndex = '999';
-            
             categoryAdviceSection.innerHTML = `
                 <div class="card mb-4">
                     <div class="card-body">
@@ -1763,17 +1757,16 @@ async function handleCategoryChange(category) {
                             <p><strong>Monthly Threshold:</strong> ₹${adviceData.threshold.toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>
                             ${adviceData.historical_average ? `<p><strong>Historical Average:</strong> ₹${adviceData.historical_average.toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>` : ''}
                             
-                            <!-- Progress Bar -->
                             <div class="mt-3">
-                                <label class="form-label">Budget Usage: ${percentageUsed}%</label>
+                                <label class="form-label">Budget Usage: ${budgetUsagePercentage}% of Threshold</label>
                                 <div class="progress">
-                                    <div class="progress-bar ${getProgressBarClass(adviceData.status)}"
-                                         role="progressbar"
-                                         style="width: ${Math.min(percentageUsed, 100)}%"
-                                         aria-valuenow="${percentageUsed}"
-                                         aria-valuemin="0"
+                                    <div class="progress-bar ${getProgressBarClass(adviceData.status)}" 
+                                         role="progressbar" 
+                                         style="width: ${Math.min(budgetUsagePercentage, 100)}%"
+                                         aria-valuenow="${budgetUsagePercentage}" 
+                                         aria-valuemin="0" 
                                          aria-valuemax="100">
-                                         ${percentageUsed}%
+                                         ${budgetUsagePercentage}%
                                     </div>
                                 </div>
                             </div>
@@ -1786,8 +1779,7 @@ async function handleCategoryChange(category) {
                         </div>
                         
                         <div class="alert alert-${getAlertClass(adviceData.status)} mt-3">
-                            ${adviceData.message}
-                            ${getThresholdWarning(percentageUsed, category)}
+                            ${adviceData.message || 'No specific advice available for this category.'}
                         </div>
                         ${adviceData.trend ? `<div class="alert alert-info mt-2">${adviceData.trend}</div>` : ''}
                         ${adviceData.advice && adviceData.advice.length > 0 ? `
@@ -1815,21 +1807,7 @@ async function handleCategoryChange(category) {
     }
 }
 
-// Helper function to get Bootstrap alert class based on status
-function getAlertClass(status) {
-    switch (status) {
-        case 'critical':
-            return 'danger';
-        case 'warning':
-            return 'warning';
-        case 'notice':
-            return 'info';
-        default:
-            return 'success';
-    }
-}
-
-// Helper function to get Bootstrap progress bar class based on status
+// Helper function to get progress bar class based on status
 function getProgressBarClass(status) {
     switch (status) {
         case 'critical':
@@ -1843,16 +1821,18 @@ function getProgressBarClass(status) {
     }
 }
 
-// Helper function to get threshold warning message
-function getThresholdWarning(percentage, category) {
-    if (percentage >= 90) {
-        return `<br><strong>⚠️ Critical Alert:</strong> You have almost reached your ${category} budget limit!`;
-    } else if (percentage >= 75) {
-        return `<br><strong>⚠️ Warning:</strong> You are approaching your ${category} budget limit.`;
-    } else if (percentage >= 50) {
-        return `<br><strong>ℹ️ Notice:</strong> You have used more than half of your ${category} budget.`;
+// Helper function to get alert class based on status
+function getAlertClass(status) {
+    switch (status) {
+        case 'critical':
+            return 'danger';
+        case 'warning':
+            return 'warning';
+        case 'notice':
+            return 'info';
+        default:
+            return 'success';
     }
-    return '';
 }
 
 // Add event listener for category changes

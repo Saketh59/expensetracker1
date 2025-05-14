@@ -1741,6 +1741,18 @@ def get_category_advice():
         transaction_count = result['transaction_count']
         highest_transaction = float(result['highest_transaction']) if result['highest_transaction'] else 0
         
+        # Get total income for the current month
+        cursor.execute('''
+            SELECT SUM(amount) as total_income
+            FROM transactions
+            WHERE user_id = ?
+            AND type = 'Income'
+            AND date >= date('now', 'start of month')
+        ''', (session['user_id'],))
+        
+        income_result = cursor.fetchone()
+        total_income = float(income_result['total_income']) if income_result['total_income'] else 0
+        
         # Get historical data
         cursor.execute('''
             WITH monthly_spending AS (
@@ -1794,6 +1806,7 @@ def get_category_advice():
             'current_spent': current_spent,
             'threshold': threshold,
             'historical_average': historical_avg,
+            'total_income': total_income,
             'status': 'good',
             'advice': [],
             'transaction_stats': {
