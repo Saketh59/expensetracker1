@@ -67,6 +67,22 @@ def init_db():
         )
     ''')
     
+    # Create category_thresholds table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS category_thresholds (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            base_threshold REAL NOT NULL,
+            dynamic_threshold REAL,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            avg_monthly_spend REAL,
+            std_monthly_spend REAL,
+            FOREIGN KEY (user_id) REFERENCES users (id),
+            UNIQUE(user_id, category)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -259,6 +275,105 @@ def predict_category_and_amount(note, subcategory='', mode='manual', amount=0):
         print(f"Error in prediction: {e}")
         return None, None
 
+def calculate_category_thresholds(user_id):
+    """Calculate and update category thresholds based on historical spending"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Get monthly spending by category for the last 6 months
+        cursor.execute('''
+            WITH monthly_spending AS (
+                SELECT 
+                    category,
+                    strftime('%Y-%m', date) as month,
+                    SUM(amount) as monthly_amount
+                FROM transactions
+                WHERE user_id = ? 
+                    AND type = 'Expense'
+                    AND date >= date('now', '-6 months')
+                GROUP BY category, strftime('%Y-%m', date)
+            )
+            SELECT 
+                category,
+                AVG(monthly_amount) as avg_spend,
+                SQRT(AVG((monthly_amount - AVG(monthly_amount)) * (monthly_amount - AVG(monthly_amount)))) as std_spend,
+                MAX(monthly_amount) as max_spend
+            FROM monthly_spending
+            GROUP BY category
+        ''', (user_id,))
+        
+        category_stats = cursor.fetchall()
+        
+        # Get user's monthly income
+        cursor.execute('''
+            SELECT AVG(monthly_income) as avg_income
+            FROM (
+                SELECT strftime('%Y-%m', date) as month,
+                       SUM(amount) as monthly_income
+                FROM transactions
+                WHERE user_id = ? AND type = 'Income'
+                GROUP BY strftime('%Y-%m', date)
+            )
+        ''', (user_id,))
+        
+        avg_monthly_income = cursor.fetchone()[0] or 0
+        
+        # Update thresholds for each category
+        for stats in category_stats:
+            category = stats['category']
+            avg_spend = stats['avg_spend']
+            std_spend = stats['std_spend']
+            max_spend = stats['max_spend']
+            
+            # Calculate base threshold using the 50-30-20 rule and category type
+            base_threshold = avg_monthly_income * get_category_allocation_percentage(category)
+            
+            # Calculate dynamic threshold using statistical analysis
+            dynamic_threshold = avg_spend + (1.5 * std_spend)  # Using 1.5 standard deviations
+            
+            # Insert or update category thresholds
+            cursor.execute('''
+                INSERT INTO category_thresholds 
+                    (user_id, category, base_threshold, dynamic_threshold, avg_monthly_spend, std_monthly_spend)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, category) DO UPDATE SET
+                    base_threshold = excluded.base_threshold,
+                    dynamic_threshold = excluded.dynamic_threshold,
+                    avg_monthly_spend = excluded.avg_monthly_spend,
+                    std_monthly_spend = excluded.std_monthly_spend,
+                    last_updated = CURRENT_TIMESTAMP
+            ''', (user_id, category, base_threshold, dynamic_threshold, avg_spend, std_spend))
+        
+        conn.commit()
+        return True
+        
+    except Exception as e:
+        print(f"Error calculating thresholds: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def get_category_allocation_percentage(category):
+    """Get recommended allocation percentage based on category type"""
+    # Define category types and their recommended allocations
+    CATEGORY_ALLOCATIONS = {
+        'Housing': 0.30,  # 30% of income
+        'Transportation': 0.15,
+        'Food': 0.15,
+        'Utilities': 0.10,
+        'Healthcare': 0.10,
+        'Entertainment': 0.05,
+        'Shopping': 0.05,
+        'Education': 0.10,
+        'Savings': 0.20,
+        'Other': 0.05
+    }
+    
+    # Default to 5% if category not found
+    return CATEGORY_ALLOCATIONS.get(category, 0.05)
+
 def generate_budget_advice(user_id):
     """Generate personalized budget advice using transaction data and ML insights"""
     conn = get_db_connection()
@@ -278,7 +393,7 @@ def generate_budget_advice(user_id):
     # Get top spending categories with their totals
     top_categories = cursor.execute('''
         SELECT category, SUM(amount) as total
-        FROM transactions 
+        FROM transactions
         WHERE user_id = ? AND type = 'Expense'
         GROUP BY category
         ORDER BY total DESC
@@ -352,6 +467,18 @@ def dashboard():
     if 'user_id' not in session:
         return redirect(url_for('index'))
     return render_template('dashboard.html')
+
+@app.route('/manual_entry')
+def manual_entry():
+    if 'user_id' not in session:
+        return redirect(url_for('index'))
+    return render_template('manual_entry.html')
+
+@app.route('/csv_upload')
+def csv_upload():
+    if 'user_id' not in session:
+        return redirect(url_for('index'))
+    return render_template('csv_upload.html')
 
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -545,208 +672,23 @@ def add_transaction():
         app.logger.error(f"Unexpected error in add_transaction: {str(e)}")
         return jsonify({'error': 'An unexpected error occurred'}), 500
 
-# @app.route('/upload_csv', methods=['POST'])
-# def upload_csv():
-#     if 'user_id' not in session:
-#         return jsonify({'error': 'Not logged in'}), 401
-        
-#     if 'file' not in request.files:
-#         return jsonify({'error': 'No file uploaded'}), 400
-        
-#     file = request.files['file']
-#     if file.filename == '':
-#         return jsonify({'error': 'No file selected'}), 400
-        
-#     if not file.filename.endswith('.csv'):
-#         return jsonify({'error': 'Please upload a CSV file'}), 400
-    
-#     conn = None
-#     try:
-#         # Read the CSV file
-#         stream = TextIOWrapper(file.stream, encoding='utf-8-sig')
-#         csv_reader = csv.DictReader(stream)
-        
-#         # Validate required columns
-#         required_columns = {'category', 'amount', 'type'}
-#         if not all(col in csv_reader.fieldnames for col in required_columns):
-#             missing = required_columns - set(csv_reader.fieldnames)
-#             return jsonify({'error': f'CSV missing required columns: {", ".join(missing)}'}), 400
-        
-#         # Store all valid transactions first
-#         valid_transactions = []
-#         errors = []
-#         income_total = 0
-#         expense_total = 0
-        
-#         for row_num, row in enumerate(csv_reader, 1):
-#             try:
-#                 # Validate category
-#                 category = row['category'].strip()
-#                 if not category:
-#                     errors.append(f"Row {row_num}: Empty category")
-#                     continue
-                
-#                 # Validate amount
-#                 try:
-#                     amount = float(str(row['amount']).replace(',', '').replace('₹', '').strip())
-#                     if amount <= 0:
-#                         errors.append(f"Row {row_num}: Amount must be positive")
-#                         continue
-#                 except (ValueError, TypeError):
-#                     errors.append(f"Row {row_num}: Invalid amount '{row['amount']}'")
-#                     continue
-                
-#                 # Get optional fields
-#                 description = row.get('description', '').strip()
-#                 date_str = row.get('date', datetime.now().strftime('%Y-%m-%d'))
-                
-#                 # Validate transaction type
-#                 transaction_type = row.get('type', 'Expense').strip().title()
-#                 if transaction_type not in ['Income', 'Expense']:
-#                     errors.append(f"Row {row_num}: Invalid type '{transaction_type}', using 'Expense'")
-#                     transaction_type = 'Expense'
-                
-#                 # Update totals
-#                 if transaction_type == 'Income':
-#                     income_total += amount
-#                 else:
-#                     expense_total += amount
-                
-#                 # Store valid transaction
-#                 valid_transactions.append({
-#                     'type': transaction_type,
-#                     'category': category,
-#                     'amount': amount,
-#                     'description': description,
-#                     'date': date_str
-#                 })
-                
-#             except Exception as e:
-#                 errors.append(f"Row {row_num}: {str(e)}")
-#                 continue
-        
-#         if not valid_transactions:
-#             error_msg = "No valid transactions found in the CSV file"
-#             if errors:
-#                 error_msg += f". Errors: {'; '.join(errors)}"
-#             return jsonify({'error': error_msg}), 400
-        
-#         # Now process valid transactions in database
-#         conn = get_db_connection()
-#         cursor = conn.cursor()
-        
-#         # Clear existing transactions
-#         cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
-        
-#         # Group transactions by category
-#         transactions_by_category = defaultdict(list)
-        
-#         # Insert transactions and group them
-#         for transaction in valid_transactions:
-#             cursor.execute('''
-#                 INSERT INTO transactions (
-#                     user_id, type, category, amount, note, date
-#                 ) VALUES (?, ?, ?, ?, ?, ?)
-#             ''', (
-#                 session['user_id'],
-#                 transaction['type'],
-#                 transaction['category'],
-#                 transaction['amount'],
-#                 transaction['description'],
-#                 transaction['date']
-#             ))
-            
-#             category_key = f"{transaction['type']}_{transaction['category']}"
-#             transactions_by_category[category_key].append(transaction)
-        
-#         # Commit the changes
-#         conn.commit()
-        
-#         # Calculate net savings
-#         net_savings = income_total - expense_total
-#         savings_rate = (net_savings / income_total * 100) if income_total > 0 else 0
-        
-#         # Get category summary with top transactions
-#         category_summary = {}
-        
-#         # Get category totals from database
-#         cursor.execute('''
-#             SELECT type, category, COUNT(*) as count, SUM(amount) as total
-#             FROM transactions 
-#             WHERE user_id = ?
-#             GROUP BY type, category
-#         ''', (session['user_id'],))
-        
-#         categories = cursor.fetchall()
-        
-#         # Process each category
-#         for cat in categories:
-#             category_key = f"{cat['type']}_{cat['category']}"
-            
-#             # Get top 3 transactions for this category
-#             top_transactions = sorted(
-#                 transactions_by_category[category_key],
-#                 key=lambda x: x['amount'],
-#                 reverse=True
-#             )[:3]
-            
-#             # Format amounts in top transactions
-#             formatted_top_transactions = []
-#             for txn in top_transactions:
-#                 formatted_txn = txn.copy()
-#                 formatted_txn['amount'] = float(formatted_txn['amount'])
-#                 formatted_top_transactions.append(formatted_txn)
-            
-#             category_summary[category_key] = {
-#                 'type': cat['type'],
-#                 'category': cat['category'],
-#                 'count': cat['count'],
-#                 'total': float(cat['total']),
-#                 'top_transactions': formatted_top_transactions
-#             }
-        
-#         response = {
-#             'message': f'Successfully imported {len(valid_transactions)} transactions',
-#             'summary': {
-#                 'total_income': float(income_total),
-#                 'total_expenses': float(expense_total),
-#                 'net_savings': float(net_savings),
-#                 'savings_rate': float(savings_rate)
-#             },
-#             'category_breakdown': category_summary
-#         }
-        
-#         if errors:
-#             response['warnings'] = errors
-        
-#         return jsonify(response)
-        
-#     except Exception as e:
-#         app.logger.error(f"Error processing CSV: {str(e)}")
-#         if conn:
-#             conn.rollback()
-#         return jsonify({'error': f'Error processing CSV file: {str(e)}'}), 500
-        
-#     finally:
-#         if conn:
-#             conn.close()
 @app.route('/upload_csv', methods=['POST'])
 def upload_csv():
-    if 'user_id' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
-        
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-        
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-        
-    if not file.filename.endswith('.csv'):
-        return jsonify({'error': 'Please upload a CSV file'}), 400
-    
     conn = None
     try:
+        if 'user_id' not in session:
+            return jsonify({'error': 'Not logged in'}), 401
+            
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+            
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+            
+        if not file.filename.endswith('.csv'):
+            return jsonify({'error': 'Please upload a CSV file'}), 400
+        
         # Read the CSV file
         stream = TextIOWrapper(file.stream, encoding='utf-8-sig')
         csv_reader = csv.DictReader(stream)
@@ -757,39 +699,54 @@ def upload_csv():
             missing = required_columns - set(csv_reader.fieldnames)
             return jsonify({'error': f'CSV missing required columns: {", ".join(missing)}'}), 400
         
-        # Store all valid transactions first
-        valid_transactions = []
+        # Store CSV data in memory
+        csv_data = list(csv_reader)
+        if not csv_data:
+            return jsonify({'error': 'CSV file is empty'}), 400
+        
+        # Initialize database connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Begin transaction
+        conn.execute('BEGIN TRANSACTION')
+        
+        # Clear existing transactions for this user
+        cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
+        
+        # Process transactions
+        imported_transactions = []
+        transactions_by_category = defaultdict(list)
+        row_count = 0
         errors = []
         income_total = 0
         expense_total = 0
         
-        for row_num, row in enumerate(csv_reader, 1):
+        for row_num, row in enumerate(csv_data, 1):
             try:
-                # Validate category
+                # Validate and clean data
                 category = row['category'].strip()
                 if not category:
                     errors.append(f"Row {row_num}: Empty category")
                     continue
                 
-                # Validate amount
                 try:
                     amount = float(str(row['amount']).replace(',', '').replace('₹', '').strip())
-                    if amount <= 0:
-                        errors.append(f"Row {row_num}: Amount must be positive")
-                        continue
                 except (ValueError, TypeError):
                     errors.append(f"Row {row_num}: Invalid amount '{row['amount']}'")
                     continue
                 
-                # Get optional fields
+                # Get optional fields with defaults
                 description = row.get('description', '').strip()
                 date_str = row.get('date', datetime.now().strftime('%Y-%m-%d'))
                 
-                # Validate transaction type
+                # Handle transaction type
                 transaction_type = row.get('type', 'Expense').strip().title()
                 if transaction_type not in ['Income', 'Expense']:
-                    errors.append(f"Row {row_num}: Invalid type '{transaction_type}', using 'Expense'")
                     transaction_type = 'Expense'
+                
+                # Ensure amount is positive
+                amount = abs(amount)
                 
                 # Update totals
                 if transaction_type == 'Income':
@@ -797,114 +754,95 @@ def upload_csv():
                 else:
                     expense_total += amount
                 
-                # Store valid transaction
-                valid_transactions.append({
+                # Insert transaction
+                cursor.execute('''
+                    INSERT INTO transactions (user_id, type, category, amount, note, date)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (session['user_id'], transaction_type, category, amount, description, date_str))
+                
+                transaction_data = {
                     'type': transaction_type,
                     'category': category,
                     'amount': amount,
                     'description': description,
                     'date': date_str
-                })
+                }
+                
+                # Store transaction by category
+                category_key = f"{transaction_type}_{category}"
+                transactions_by_category[category_key].append(transaction_data)
+                imported_transactions.append(transaction_data)
+                row_count += 1
                 
             except Exception as e:
                 errors.append(f"Row {row_num}: {str(e)}")
                 continue
         
-        if not valid_transactions:
+        if row_count == 0:
+            conn.rollback()
             error_msg = "No valid transactions found in the CSV file"
             if errors:
                 error_msg += f". Errors: {'; '.join(errors)}"
             return jsonify({'error': error_msg}), 400
         
-        # Now process valid transactions in database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Clear existing transactions
-        cursor.execute('DELETE FROM transactions WHERE user_id = ?', (session['user_id'],))
-        
-        # Group transactions by category and type
-        transactions_by_category = defaultdict(list)
-        
-        # Insert transactions and group them
-        for transaction in valid_transactions:
-            cursor.execute('''
-                INSERT INTO transactions (
-                    user_id, type, category, amount, note, date
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                session['user_id'],
-                transaction['type'],
-                transaction['category'],
-                transaction['amount'],
-                transaction['description'],
-                transaction['date']
-            ))
-            
-            category_key = f"{transaction['type']}_{transaction['category']}"
-            transactions_by_category[category_key].append(transaction)
-        
-        # Commit the changes
-        conn.commit()
-        
         # Calculate net savings
         net_savings = income_total - expense_total
         savings_rate = (net_savings / income_total * 100) if income_total > 0 else 0
         
-        # Get category summary with top transactions
-        category_summary = {}
+        # Get category-wise breakdown with top 3 transactions
+        category_transactions = {}
+        cursor.execute('''
+            SELECT type, category, COUNT(*) as count, SUM(amount) as total
+            FROM transactions 
+            WHERE user_id = ?
+            GROUP BY type, category
+        ''', (session['user_id'],))
         
-        # Process each category group
-        for category_key, transactions in transactions_by_category.items():
-            # Parse category key to get type and category
-            type_name, category_name = category_key.split('_', 1)
+        categories = cursor.fetchall()
+        
+        for cat in categories:
+            key = f"{cat['type']}_{cat['category']}"
+            # Get all transactions for this category
+            category_txns = transactions_by_category[key]
             
-            # Get top 3 transactions for this category (sorted by amount descending)
+            # Sort by amount and get top 3
             top_transactions = sorted(
-                transactions,
+                category_txns,
                 key=lambda x: x['amount'],
                 reverse=True
             )[:3]
             
-            # Format amounts in top transactions
-            formatted_top_transactions = []
-            for txn in top_transactions:
-                formatted_txn = txn.copy()
-                formatted_txn['amount'] = float(formatted_txn['amount'])
-                formatted_top_transactions.append(formatted_txn)
-            
-            # Calculate category totals
-            total_amount = sum(t['amount'] for t in transactions)
-            transaction_count = len(transactions)
-            
-            category_summary[category_key] = {
-                'type': type_name,
-                'category': category_name,
-                'count': transaction_count,
-                'total': float(total_amount),
-                'top_transactions': formatted_top_transactions
+            category_transactions[key] = {
+                'type': cat['type'],
+                'category': cat['category'],
+                'count': cat['count'],
+                'total': float(cat['total']),
+                'top_transactions': top_transactions
             }
         
+        # Commit the transaction
+        conn.commit()
+        
         response = {
-            'message': f'Successfully imported {len(valid_transactions)} transactions',
+            'message': f'Successfully imported {row_count} transactions',
             'summary': {
-                'total_income': float(income_total),
-                'total_expenses': float(expense_total),
-                'net_savings': float(net_savings),
-                'savings_rate': float(savings_rate)
+                'total_income': income_total,
+                'total_expenses': expense_total,
+                'net_savings': net_savings,
+                'savings_rate': savings_rate
             },
-            'category_breakdown': category_summary
+            'category_breakdown': category_transactions
         }
         
         if errors:
             response['warnings'] = errors
-        
+            
         return jsonify(response)
         
     except Exception as e:
-        app.logger.error(f"Error processing CSV: {str(e)}")
         if conn:
             conn.rollback()
+        app.logger.error(f"Error processing CSV: {str(e)}")
         return jsonify({'error': f'Error processing CSV file: {str(e)}'}), 500
         
     finally:
@@ -933,38 +871,105 @@ def get_transactions():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        LIMIT = 20
-        OFFSET = int(request.args.get('offset', 0))
         
-        # Get transactions with date filtering
+        # Get filter parameters
+        transaction_type = request.args.get('type', 'all')
         date_filter = request.args.get('date_filter', 'all')
-        if date_filter == 'today':
-            cursor.execute('''
-                SELECT * FROM transactions 
-                WHERE user_id = ? AND date >= date('now', 'start of day')
-                ORDER BY date DESC
-                LIMIT ? OFFSET ?
-            ''', (session['user_id'], LIMIT, OFFSET))
-        elif date_filter == 'this_month':
-            cursor.execute('''
-                SELECT * FROM transactions 
-                WHERE user_id = ? AND date >= date('now', 'start of month')
-                ORDER BY date DESC
-                LIMIT ? OFFSET ?
-            ''', (session['user_id'], LIMIT, OFFSET))
-        else:
-            cursor.execute('''
-                SELECT * FROM transactions 
-                WHERE user_id = ? 
-                ORDER BY date DESC
-                LIMIT ? OFFSET ?
-            ''', (session['user_id'], LIMIT, OFFSET))
+        category = request.args.get('category', 'all')
         
+        # Base query
+        query = '''
+            SELECT * FROM transactions 
+            WHERE user_id = ?
+        '''
+        params = [session['user_id']]
+        
+        # Add type filter
+        if transaction_type != 'all':
+            query += ' AND type = ?'
+            params.append(transaction_type)
+            
+        # Add category filter
+        if category != 'all':
+            query += ' AND category = ?'
+            params.append(category)
+        
+        # Add date filter
+        if date_filter == 'today':
+            query += ' AND date >= date("now", "start of day")'
+        elif date_filter == 'this_month':
+            query += ' AND date >= date("now", "start of month")'
+        
+        # Add ordering
+        query += ' ORDER BY date DESC'
+        
+        # Get transactions
+        cursor.execute(query, params)
         transactions = cursor.fetchall()
         
-        # Log all transactions being returned
-        app.logger.info(f"[get_transactions] user_id={session['user_id']} Transactions returned: {[dict(txn) for txn in transactions]}")
+        # Get totals with the same filters
+        total_query = '''
+            SELECT type, SUM(amount) as total
+            FROM transactions 
+            WHERE user_id = ?
+        '''
+        total_params = [session['user_id']]
         
+        if transaction_type != 'all':
+            total_query += ' AND type = ?'
+            total_params.append(transaction_type)
+            
+        if category != 'all':
+            total_query += ' AND category = ?'
+            total_params.append(category)
+            
+        if date_filter == 'today':
+            total_query += ' AND date >= date("now", "start of day")'
+        elif date_filter == 'this_month':
+            total_query += ' AND date >= date("now", "start of month")'
+            
+        total_query += ' GROUP BY type'
+        
+        cursor.execute(total_query, total_params)
+        totals = cursor.fetchall()
+        
+        income_total = 0
+        expense_total = 0
+        for total in totals:
+            if total['type'] == 'Income':
+                income_total = float(total['total'])
+            else:
+                expense_total = float(total['total'])
+        
+        net_savings = income_total - expense_total
+        
+        # Get category breakdown
+        category_query = '''
+            SELECT type, category, COUNT(*) as count, SUM(amount) as total
+            FROM transactions 
+            WHERE user_id = ?
+        '''
+        category_params = [session['user_id']]
+        
+        if transaction_type != 'all':
+            category_query += ' AND type = ?'
+            category_params.append(transaction_type)
+            
+        if category != 'all':
+            category_query += ' AND category = ?'
+            category_params.append(category)
+            
+        if date_filter == 'today':
+            category_query += ' AND date >= date("now", "start of day")'
+        elif date_filter == 'this_month':
+            category_query += ' AND date >= date("now", "start of month")'
+            
+        category_query += ' GROUP BY type, category'
+        
+        cursor.execute(category_query, category_params)
+        categories = cursor.fetchall()
+        
+        # Prepare response data
         transaction_list = []
         for txn in transactions:
             transaction_list.append({
@@ -978,43 +983,43 @@ def get_transactions():
                 'date': txn['date']
             })
         
-        # Get totals for the filtered period
-        if date_filter == 'today':
-            income_total = cursor.execute(
-                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Income" AND date >= date("now", "start of day")',
-                (session['user_id'],)
-            ).fetchone()[0] or 0
-            expense_total = cursor.execute(
-                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Expense" AND date >= date("now", "start of day")',
-                (session['user_id'],)
-            ).fetchone()[0] or 0
-        elif date_filter == 'this_month':
-            income_total = cursor.execute(
-                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Income" AND date >= date("now", "start of month")',
-                (session['user_id'],)
-            ).fetchone()[0] or 0
-            expense_total = cursor.execute(
-                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Expense" AND date >= date("now", "start of month")',
-                (session['user_id'],)
-            ).fetchone()[0] or 0
-        else:
-            income_total = cursor.execute(
-                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Income"',
-                (session['user_id'],)
-            ).fetchone()[0] or 0
-            expense_total = cursor.execute(
-                'SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE user_id = ? AND type = "Expense"',
-                (session['user_id'],)
-            ).fetchone()[0] or 0
-        
-        net_savings = income_total - expense_total
-        budget_advice = f"Total Income: ₹{income_total:.2f}\nTotal Expenses: ₹{expense_total:.2f}\nNet Savings: ₹{net_savings:.2f}"
+        category_breakdown = {}
+        for cat in categories:
+            key = f"{cat['type']}_{cat['category']}"
+            
+            # Get top 3 transactions for this category
+            cursor.execute('''
+                SELECT * FROM transactions 
+                WHERE user_id = ? AND type = ? AND category = ?
+                ORDER BY amount DESC LIMIT 3
+            ''', (session['user_id'], cat['type'], cat['category']))
+            
+            top_transactions = []
+            for t in cursor.fetchall():
+                top_transactions.append({
+                    'amount': float(t['amount']),
+                    'date': t['date'],
+                    'description': t['note']
+                })
+            
+            category_breakdown[key] = {
+                'type': cat['type'],
+                'category': cat['category'],
+                'count': cat['count'],
+                'total': float(cat['total']),
+                'top_transactions': top_transactions
+            }
         
         return jsonify({
             'transactions': transaction_list,
-            'budget_advice': budget_advice,
-            'date_filter': date_filter
+            'summary': {
+                'total_income': income_total,
+                'total_expenses': expense_total,
+                'net_savings': net_savings
+            },
+            'category_breakdown': category_breakdown
         })
+        
     except Exception as e:
         app.logger.error(f"[get_transactions] Error: {str(e)}")
         return jsonify({'error': 'An error occurred while fetching transactions'}), 500
@@ -1586,6 +1591,257 @@ def predict_category_spending(category_models, category, features):
         'avg_amount': model_info['avg_amount'],
         'std_amount': model_info['std_amount']
     }
+
+@app.route('/get_category_advice')
+def get_category_advice():
+    """Get advice for a specific category"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    category = request.args.get('category')
+    if not category:
+        return jsonify({'error': 'Category not specified'}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Define category-specific thresholds and advice
+        CATEGORY_THRESHOLDS = {
+            'Housing': {
+                'threshold': 30000,
+                'advice': [
+                    "Consider negotiating rent or finding a more affordable place",
+                    "Look for ways to reduce utility costs",
+                    "Consider getting a roommate to split costs"
+                ],
+                'critical_advice': [
+                    "Review your lease agreement for any cost-saving opportunities",
+                    "Consider downsizing or relocating to a more affordable area",
+                    "Evaluate utility usage and implement energy-saving measures"
+                ]
+            },
+            'Transportation': {
+                'threshold': 15000,
+                'advice': [
+                    "Consider using public transportation more often",
+                    "Look for carpooling opportunities",
+                    "Plan your trips to save fuel"
+                ],
+                'critical_advice': [
+                    "Consider switching to a more fuel-efficient vehicle",
+                    "Look into monthly public transportation passes for cost savings",
+                    "Explore work-from-home opportunities to reduce commuting costs"
+                ]
+            },
+            'Food': {
+                'threshold': 10000,
+                'advice': [
+                    "Try meal planning to reduce food waste",
+                    "Cook more meals at home",
+                    "Look for grocery deals and buy in bulk"
+                ],
+                'critical_advice': [
+                    "Create a strict grocery budget and stick to it",
+                    "Use apps to find the best deals and discounts",
+                    "Consider growing some basic vegetables at home"
+                ]
+            },
+            'Health': {
+                'threshold': 8000,
+                'advice': [
+                    "Consider getting health insurance if you haven't",
+                    "Look for preventive care options",
+                    "Compare prices for medications"
+                ],
+                'critical_advice': [
+                    "Review your health insurance plan for better coverage",
+                    "Ask about generic medication alternatives",
+                    "Look into preventive care to avoid costly treatments"
+                ]
+            },
+            'Entertainment': {
+                'threshold': 5000,
+                'advice': [
+                    "Look for free or low-cost entertainment options",
+                    "Use streaming services instead of multiple subscriptions",
+                    "Take advantage of happy hours and deals"
+                ],
+                'critical_advice': [
+                    "Cancel unused entertainment subscriptions",
+                    "Look for free community events and activities",
+                    "Consider sharing subscription costs with family or friends"
+                ]
+            }
+        }
+        
+        # Get current month's spending for the category
+        cursor.execute('''
+            SELECT SUM(amount) as total_spent,
+                   COUNT(*) as transaction_count,
+                   MAX(amount) as highest_transaction
+            FROM transactions
+            WHERE user_id = ? 
+            AND category = ?
+            AND type = 'Expense'
+            AND date >= date('now', 'start of month')
+        ''', (session['user_id'], category))
+        
+        result = cursor.fetchone()
+        current_spent = float(result['total_spent']) if result['total_spent'] else 0
+        transaction_count = result['transaction_count']
+        highest_transaction = float(result['highest_transaction']) if result['highest_transaction'] else 0
+        
+        # Get historical data
+        cursor.execute('''
+            WITH monthly_spending AS (
+                SELECT strftime('%Y-%m', date) as month,
+                       SUM(amount) as monthly_amount,
+                       COUNT(*) as monthly_count
+                FROM transactions
+                WHERE user_id = ? 
+                AND category = ?
+                AND type = 'Expense'
+                GROUP BY strftime('%Y-%m', date)
+            )
+            SELECT 
+                AVG(monthly_amount) as avg_spend,
+                AVG(monthly_count) as avg_transactions,
+                MAX(monthly_amount) as max_monthly_spend
+            FROM monthly_spending
+        ''', (session['user_id'], category))
+        
+        hist_result = cursor.fetchone()
+        historical_avg = float(hist_result['avg_spend']) if hist_result['avg_spend'] else 0
+        avg_transactions = float(hist_result['avg_transactions']) if hist_result['avg_transactions'] else 0
+        max_monthly_spend = float(hist_result['max_monthly_spend']) if hist_result['max_monthly_spend'] else 0
+        
+        # Get category threshold and advice
+        category_info = CATEGORY_THRESHOLDS.get(category, {
+            'threshold': historical_avg * 1.2 if historical_avg > 0 else 5000,
+            'advice': [
+                "Track your spending in this category",
+                "Set a budget and stick to it",
+                "Look for ways to reduce unnecessary expenses"
+            ],
+            'critical_advice': [
+                "Review all expenses in this category",
+                "Create a detailed budget plan",
+                "Consider temporary spending freeze"
+            ]
+        })
+        
+        threshold = category_info['threshold']
+        advice_list = category_info['advice']
+        critical_advice = category_info.get('critical_advice', advice_list)
+        
+        # Generate response with enhanced analysis
+        response = {
+            'category': category,
+            'current_spent': current_spent,
+            'threshold': threshold,
+            'historical_average': historical_avg,
+            'status': 'good',
+            'advice': [],
+            'transaction_stats': {
+                'count': transaction_count,
+                'highest_amount': highest_transaction,
+                'avg_transactions_per_month': round(avg_transactions, 1),
+                'highest_monthly_spend': max_monthly_spend
+            }
+        }
+        
+        # Calculate percentage of threshold used
+        threshold_percentage = (current_spent / threshold * 100) if threshold > 0 else 0
+        
+        # Determine status and advice based on spending patterns
+        if threshold_percentage >= 90:
+            response['status'] = 'critical'
+            response['message'] = f"⚠️ CRITICAL ALERT: You've spent {threshold_percentage:.1f}% of your monthly budget for {category}!"
+            response['advice'] = critical_advice
+            
+            # Add specific recommendations based on transaction patterns
+            if transaction_count > avg_transactions * 1.5:
+                response['advice'].append(f"You've made {transaction_count} transactions this month, which is higher than your average of {avg_transactions:.1f}. Consider reducing transaction frequency.")
+            
+            if highest_transaction > threshold * 0.5:
+                response['advice'].append(f"Your highest transaction (₹{highest_transaction:.2f}) represents a significant portion of your budget. Try to avoid such large expenses.")
+            
+        elif threshold_percentage >= 75:
+            response['status'] = 'warning'
+            response['message'] = f"⚠️ Warning: You've spent {threshold_percentage:.1f}% of your monthly budget."
+            response['advice'] = advice_list
+            
+            # Add preventive recommendations
+            if current_spent > historical_avg:
+                response['advice'].append(f"Your current spending (₹{current_spent:.2f}) is higher than your historical average (₹{historical_avg:.2f}). Consider reviewing your expenses.")
+            
+        elif threshold_percentage >= 50:
+            response['status'] = 'notice'
+            response['message'] = f"ℹ️ Notice: You've spent {threshold_percentage:.1f}% of your monthly budget."
+            response['advice'] = [advice_list[0]]
+            
+            # Add planning recommendations
+            if transaction_count < avg_transactions * 0.5:
+                response['advice'].append("You still have room in your budget, but plan your remaining expenses carefully.")
+            
+        else:
+            response['message'] = f"✅ Good job! You're well within budget for {category}."
+            if current_spent < historical_avg * 0.5:
+                response['advice'].append("You're spending less than usual this month - great work on budget management!")
+        
+        # Add trend analysis
+        if historical_avg > 0:
+            percent_diff = ((current_spent - historical_avg) / historical_avg * 100)
+            if percent_diff > 20:
+                response['trend'] = f"📈 Your spending is {percent_diff:.1f}% higher than your historical average."
+                if percent_diff > 50:
+                    response['trend'] += " This is a significant increase - consider reviewing your spending habits."
+            elif percent_diff < -20:
+                response['trend'] = f"📉 Your spending is {abs(percent_diff):.1f}% lower than your historical average."
+                if current_spent < threshold * 0.3:
+                    response['trend'] += " You're doing an excellent job managing expenses in this category!"
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        print(f"Error getting category advice: {e}")
+        return jsonify({'error': 'Unable to generate advice at this time'}), 500
+    finally:
+        conn.close()
+
+@app.route('/delete_transaction/<int:transaction_id>', methods=['DELETE'])
+def delete_transaction(transaction_id):
+    """Delete a specific transaction"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # First, verify that the transaction belongs to the current user
+        cursor.execute('''
+            SELECT id FROM transactions 
+            WHERE id = ? AND user_id = ?
+        ''', (transaction_id, session['user_id']))
+
+        if not cursor.fetchone():
+            return jsonify({'error': 'Transaction not found or unauthorized'}), 404
+
+        # Delete the transaction
+        cursor.execute('DELETE FROM transactions WHERE id = ?', (transaction_id,))
+        conn.commit()
+
+        return jsonify({'message': 'Transaction deleted successfully'})
+
+    except Exception as e:
+        app.logger.error(f"Error deleting transaction: {str(e)}")
+        return jsonify({'error': 'Failed to delete transaction'}), 500
+
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 if __name__ == '__main__':
     app.run(debug=True)

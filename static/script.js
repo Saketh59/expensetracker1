@@ -1145,8 +1145,53 @@ async function handleCSVUpload() {
         if (response.ok) {
             showUploadStatus(result.message, 'success');
             
-            // Display category breakdown with top transactions
-            displayCategoryBreakdown(result.category_breakdown);
+            // Display category-wise transactions
+            const previewContainer = document.getElementById('csvPreviewContainer');
+            if (previewContainer && result.category_transactions) {
+                let previewHTML = '<div class="category-transactions">';
+                
+                for (const [category, transactions] of Object.entries(result.category_transactions)) {
+                    previewHTML += `
+                        <div class="category-section">
+                            <h4>${category}</h4>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>Type</th>
+                                            <th>Amount</th>
+                                            <th>Date</th>
+                                            <th>Note</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                    `;
+                    
+                    transactions.forEach(txn => {
+                        const amountClass = txn.type.toLowerCase() === 'income' ? 'income' : 'expense';
+                        const amountSign = txn.type.toLowerCase() === 'income' ? '+' : '-';
+                        previewHTML += `
+                            <tr>
+                                <td>${txn.type}</td>
+                                <td class="${amountClass}">${amountSign}₹${txn.amount.toFixed(2)}</td>
+                                <td>${formatDate(txn.date)}</td>
+                                <td>${txn.note || ''}</td>
+                            </tr>
+                        `;
+                    });
+                    
+                    previewHTML += `
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                previewHTML += '</div>';
+                previewContainer.innerHTML = previewHTML;
+                previewContainer.style.display = 'block';
+            }
             
             // Update the entire dashboard
             await updateDashboard();
@@ -1165,123 +1210,6 @@ async function handleCSVUpload() {
     } catch (error) {
         console.error('Upload error:', error);
         showUploadStatus('Upload failed: ' + error.message, 'error');
-    }
-}
-
-// Function to display category breakdown with top transactions
-function displayCategoryBreakdown(categoryBreakdown) {
-    const previewContainer = document.getElementById('csvPreviewContainer');
-    if (!previewContainer) return;
-
-    let html = '<h3>Category Breakdown</h3>';
-
-    // Sort categories by type (Income first, then Expenses)
-    const sortedCategories = Object.entries(categoryBreakdown).sort((a, b) => {
-        if (a[1].type === b[1].type) return 0;
-        return a[1].type === 'Income' ? -1 : 1;
-    });
-
-    // Group by type
-    const groupedCategories = {
-        Income: [],
-        Expense: []
-    };
-
-    sortedCategories.forEach(([key, data]) => {
-        groupedCategories[data.type].push({ key, ...data });
-    });
-
-    // Display Income categories first
-    if (groupedCategories.Income.length > 0) {
-        html += '<div class="category-group income-group">';
-        html += '<h4 class="type-header">Income Categories</h4>';
-        groupedCategories.Income.forEach(category => {
-            html += createCategorySection(category);
-        });
-        html += '</div>';
-    }
-
-    // Then display Expense categories
-    if (groupedCategories.Expense.length > 0) {
-        html += '<div class="category-group expense-group">';
-        html += '<h4 class="type-header">Expense Categories</h4>';
-        groupedCategories.Expense.forEach(category => {
-            html += createCategorySection(category);
-        });
-        html += '</div>';
-    }
-
-    previewContainer.innerHTML = html;
-    previewContainer.style.display = 'block';
-}
-
-// Helper function to create a category section with its top transactions
-function createCategorySection(categoryData) {
-    const { category, type, count, total, top_transactions } = categoryData;
-    
-    let html = `
-        <div class="category-section ${type.toLowerCase()}-section">
-            <h5 class="category-header">${category}</h5>
-            <div class="category-summary">
-                <p>Total Transactions: ${count}</p>
-                <p>Total Amount: ₹${parseFloat(total).toFixed(2)}</p>
-            </div>
-    `;
-
-    if (top_transactions && top_transactions.length > 0) {
-        html += `
-            <div class="top-transactions">
-                <h6>Top 3 Transactions</h6>
-                <div class="table-responsive">
-                    <table class="table table-sm table-bordered">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Amount</th>
-                                <th>Description</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-        `;
-
-        top_transactions.forEach(txn => {
-            const amountClass = type.toLowerCase() === 'income' ? 'text-success' : 'text-danger';
-            const amountSign = type.toLowerCase() === 'income' ? '+' : '-';
-            const formattedDate = formatDate(txn.date);
-            
-            html += `
-                <tr>
-                    <td>${formattedDate}</td>
-                    <td class="${amountClass}">${amountSign}₹${parseFloat(txn.amount).toFixed(2)}</td>
-                    <td>${txn.description || 'No description'}</td>
-                </tr>
-            `;
-        });
-
-        html += `
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        `;
-    }
-
-    html += '</div>';
-    return html;
-}
-
-// Helper function to format date
-function formatDate(dateString) {
-    if (!dateString) return "N/A";
-    try {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('en-IN', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric'
-        });
-    } catch (e) {
-        return dateString;
     }
 }
 
@@ -1328,6 +1256,7 @@ async function handleManualEntry(e) {
             amount,
             note,
             category: type === 'Income' ? 'Income' : categoryField.value,
+            subcategory: type === 'Income' ? '' : subcategoryField.value,
             mode: 'Cash'
         };
         console.log('Sending transaction data:', transactionData);
@@ -1358,14 +1287,6 @@ async function handleManualEntry(e) {
         showUploadStatus('Error: Failed to add transaction. Please try again.', 'danger');
     }
 }
-
-// Attach the form submit listener after DOM load
-document.addEventListener('DOMContentLoaded', () => {
-    const manualForm = document.getElementById('manual-entry-form');
-    if (manualForm) {
-        manualForm.addEventListener('submit', handleManualEntry);
-    }
-});
 
 // Function to show upload status with appropriate styling
 function showUploadStatus(message, type) {
@@ -1402,7 +1323,68 @@ document.addEventListener('DOMContentLoaded', () => {
     manualForm.addEventListener('submit', handleManualEntry);
 });
 
-// Function to load user info
+// Function to display imported transactions
+function displayImportedTransactions(transactions) {
+    // Get the transactions table body
+    const tbody = document.querySelector('#transactionsTable tbody');
+    if (!tbody) return;
+    
+    // Clear loading indicator if present
+    const loadingRow = document.getElementById('loadingRow');
+    if (loadingRow) {
+        loadingRow.remove();
+    }
+    
+    // If table is empty, clear any "no transactions" message
+    if (tbody.innerText.includes('No transactions found')) {
+        tbody.innerHTML = '';
+    }
+    
+    // Add each transaction to the table
+    transactions.forEach(txn => {
+        // Create new row at the top of the table
+        const newRow = tbody.insertRow(0);
+        
+        // Format the date
+        let formattedDate = txn.date;
+        try {
+            // Try to parse and format the date (assuming ISO format)
+            const date = new Date(txn.date);
+            formattedDate = date.toLocaleDateString();
+        } catch (e) {
+            console.log('Could not format date:', e);
+        }
+        
+        // Apply the appropriate class based on transaction type
+        const amountClass = txn.type.toLowerCase() === 'income' ? 'income' : 'expense';
+        
+        // Format the amount with appropriate sign
+        const formattedAmount = txn.type.toLowerCase() === 'income' 
+            ? `+₹${parseFloat(txn.amount).toFixed(2)}`
+            : `-₹${parseFloat(txn.amount).toFixed(2)}`;
+        
+        // Set row HTML
+        newRow.innerHTML = `
+            <td>${txn.type}</td>
+            <td>${txn.category}</td>
+            <td>${txn.subcategory || ''}</td>
+            <td>${txn.note || ''}</td>
+            <td class="${amountClass}">${formattedAmount}</td>
+            <td>${formattedDate}</td>
+        `;
+        
+        // Add a highlight effect to new rows
+        newRow.classList.add('highlight-new');
+        setTimeout(() => {
+            newRow.classList.remove('highlight-new');
+        }, 3000);
+    });
+    
+    // Update any counters or totals
+    updateTransactionStats();
+}
+
+// Load user info
 async function loadUserInfo() {
     try {
         const response = await fetch("/user_info");
@@ -1722,3 +1704,156 @@ async function getSpendingInsights() {
         insightsContainer.innerHTML = 'Error loading insights. Please try again.';
     }
 }
+
+// Function to handle category selection change
+async function handleCategoryChange(category) {
+    try {
+        // Get the necessary DOM elements
+        const categoryAdviceSection = document.getElementById('categoryAdvice');
+        const mainTransactionsSection = document.getElementById('mainTransactionsSection');
+        const filterCategory = document.getElementById('filterCategory');
+        
+        // Ensure the category dropdown is always visible and interactive
+        if (filterCategory) {
+            filterCategory.style.display = 'block';
+            filterCategory.style.pointerEvents = 'auto';
+            filterCategory.value = category || 'all';
+        }
+
+        if (!category || category === 'all') {
+            if (categoryAdviceSection) {
+                categoryAdviceSection.style.display = 'none';
+            }
+            if (mainTransactionsSection) {
+                mainTransactionsSection.style.display = 'block';
+            }
+            // Load all transactions
+            await loadTransactions();
+            return;
+        }
+
+        // Get category advice
+        const adviceResponse = await fetch(`/get_category_advice?category=${encodeURIComponent(category)}`);
+        const adviceData = await adviceResponse.json();
+
+        if (!adviceResponse.ok) {
+            throw new Error(adviceData.error || 'Failed to get category advice');
+        }
+
+        // Calculate percentage of threshold used
+        const percentageUsed = (adviceData.current_spent / adviceData.threshold * 100).toFixed(1);
+        
+        // Update the advice section
+        if (categoryAdviceSection) {
+            // Ensure the advice section doesn't overlap with the dropdown
+            categoryAdviceSection.style.position = 'relative';
+            categoryAdviceSection.style.zIndex = '999';
+            
+            categoryAdviceSection.innerHTML = `
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h4 class="card-title">${category} - Budget Analysis</h4>
+                        <div class="budget-stats">
+                            <p><strong>Current Spending:</strong> ₹${adviceData.current_spent.toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>
+                            <p><strong>Monthly Threshold:</strong> ₹${adviceData.threshold.toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>
+                            ${adviceData.historical_average ? `<p><strong>Historical Average:</strong> ₹${adviceData.historical_average.toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>` : ''}
+                            
+                            <!-- Progress Bar -->
+                            <div class="mt-3">
+                                <label class="form-label">Budget Usage: ${percentageUsed}%</label>
+                                <div class="progress">
+                                    <div class="progress-bar ${getProgressBarClass(adviceData.status)}"
+                                         role="progressbar"
+                                         style="width: ${Math.min(percentageUsed, 100)}%"
+                                         aria-valuenow="${percentageUsed}"
+                                         aria-valuemin="0"
+                                         aria-valuemax="100">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="alert alert-${getAlertClass(adviceData.status)} mt-3">
+                            ${adviceData.message}
+                            ${getThresholdWarning(percentageUsed, category)}
+                        </div>
+                        ${adviceData.trend ? `<div class="alert alert-info mt-2">${adviceData.trend}</div>` : ''}
+                        ${adviceData.advice && adviceData.advice.length > 0 ? `
+                            <div class="mt-3">
+                                <h5>Recommendations:</h5>
+                                <ul class="list-unstyled">
+                                    ${adviceData.advice.map(tip => `<li>• ${tip}</li>`).join('')}
+                                </ul>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+            categoryAdviceSection.style.display = 'block';
+        }
+
+        // Keep the main transactions section visible
+        if (mainTransactionsSection) {
+            mainTransactionsSection.style.display = 'block';
+        }
+
+        // Update transactions table with filtered data
+        await loadTransactions();
+
+    } catch (error) {
+        console.error('Error updating category view:', error);
+        showUploadStatus('Error updating category view. Please try again.', 'danger');
+    }
+}
+
+// Helper function to get Bootstrap alert class based on status
+function getAlertClass(status) {
+    switch (status) {
+        case 'critical':
+            return 'danger';
+        case 'warning':
+            return 'warning';
+        case 'notice':
+            return 'info';
+        default:
+            return 'success';
+    }
+}
+
+// Helper function to get Bootstrap progress bar class based on status
+function getProgressBarClass(status) {
+    switch (status) {
+        case 'critical':
+            return 'bg-danger';
+        case 'warning':
+            return 'bg-warning';
+        case 'notice':
+            return 'bg-info';
+        default:
+            return 'bg-success';
+    }
+}
+
+// Helper function to get threshold warning message
+function getThresholdWarning(percentage, category) {
+    if (percentage >= 90) {
+        return `<br><strong>⚠️ Critical Alert:</strong> You have almost reached your ${category} budget limit!`;
+    } else if (percentage >= 75) {
+        return `<br><strong>⚠️ Warning:</strong> You are approaching your ${category} budget limit.`;
+    } else if (percentage >= 50) {
+        return `<br><strong>ℹ️ Notice:</strong> You have used more than half of your ${category} budget.`;
+    }
+    return '';
+}
+
+// Add event listener for category changes
+document.addEventListener('DOMContentLoaded', function() {
+    const filterCategory = document.getElementById('filterCategory');
+    if (filterCategory) {
+        // Ensure the dropdown is always interactive
+        filterCategory.style.pointerEvents = 'auto';
+        filterCategory.addEventListener('change', function(e) {
+            handleCategoryChange(e.target.value);
+        });
+    }
+});
