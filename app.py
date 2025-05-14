@@ -1031,137 +1031,131 @@ def get_transactions():
 def get_budget_advice():
     if 'user_id' not in session:
         return jsonify({'error': 'Not logged in'}), 401
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Debug: Log all transactions for the user
+        # Get current month's data
         cursor.execute('''
-            SELECT type, amount, category, date 
+            SELECT type, category, SUM(amount) as total
             FROM transactions 
-            WHERE user_id = ?
-            ORDER BY date DESC
+            WHERE user_id = ? 
+            AND date >= date('now', 'start of month')
+            GROUP BY type, category
         ''', (session['user_id'],))
-        all_transactions = cursor.fetchall()
-        app.logger.info(f"[get_budget_advice] All transactions for user {session['user_id']}: {[dict(row) for row in all_transactions]}")
+        current_month = cursor.fetchall()
 
-        # Get income with explicit type check
+        # Get previous month's data for comparison
         cursor.execute('''
-            SELECT COALESCE(SUM(amount), 0) as total_income
+            SELECT type, category, SUM(amount) as total
             FROM transactions 
-            WHERE user_id = ? AND type = 'Income'
+            WHERE user_id = ? 
+            AND date >= date('now', 'start of month', '-1 month')
+            AND date < date('now', 'start of month')
+            GROUP BY type, category
         ''', (session['user_id'],))
-        income_result = cursor.fetchone()
-        income = float(income_result['total_income']) if income_result and income_result['total_income'] is not None else 0
-        app.logger.info(f"[get_budget_advice] Total income calculated: {income}")
+        previous_month = cursor.fetchall()
 
-        # Get expenses with explicit type check
-        cursor.execute('''
-            SELECT COALESCE(SUM(amount), 0) as total_expenses
-            FROM transactions 
-            WHERE user_id = ? AND type = 'Expense'
-        ''', (session['user_id'],))
-        expense_result = cursor.fetchone()
-        expenses = float(expense_result['total_expenses']) if expense_result and expense_result['total_expenses'] is not None else 0
-        app.logger.info(f"[get_budget_advice] Total expenses calculated: {expenses}")
+        # Calculate total income and expenses
+        income = sum(float(row['total']) for row in current_month if row['type'] == 'Income')
+        expenses = sum(float(row['total']) for row in current_month if row['type'] == 'Expense')
 
-        # Get income categories breakdown with explicit type check
-        cursor.execute('''
-            SELECT category, COALESCE(SUM(amount), 0) as total
-            FROM transactions 
-            WHERE user_id = ? AND type = 'Income'
-            GROUP BY category
-            ORDER BY total DESC
-        ''', (session['user_id'],))
-        income_categories = cursor.fetchall()
-        app.logger.info(f"[get_budget_advice] Income categories: {[dict(row) for row in income_categories]}")
+        # Define category thresholds (percentage of income)
+        CATEGORY_THRESHOLDS = {
+            'Housing': 0.30,      # 30% of income
+            'Food': 0.15,         # 15% of income
+            'Transportation': 0.15,# 15% of income
+            'Utilities': 0.10,    # 10% of income
+            'Healthcare': 0.10,   # 10% of income
+            'Entertainment': 0.05, # 5% of income
+            'Shopping': 0.05,     # 5% of income
+            'Education': 0.10,    # 10% of income
+            'Savings': 0.20,
+            'Other': 0.05
+        }
 
-        # Get expense categories breakdown
-        cursor.execute('''
-            SELECT category, COALESCE(SUM(amount), 0) as total
-            FROM transactions 
-            WHERE user_id = ? AND type = 'Expense'
-            GROUP BY category
-            ORDER BY total DESC
-        ''', (session['user_id'],))
-        expense_categories = cursor.fetchall()
+        advice = []
+        urgent_alerts = []
+        warnings = []
+        positive_notes = []
 
-        # Get recent transactions
-        cursor.execute('''
-            SELECT type, amount, category, note, date
-            FROM transactions 
-            WHERE user_id = ?
-            ORDER BY date DESC
-            LIMIT 5
-        ''', (session['user_id'],))
-        recent_transactions = cursor.fetchall()
-
-        conn.close()
-
+        # Calculate net savings
         net_savings = income - expenses
         savings_rate = (net_savings / income * 100) if income > 0 else 0
 
-        advice = []
-        
-        # Financial Summary
-        advice.append(f"💰 Total Income: ₹{income:,.2f}")
-        advice.append(f"💸 Total Expenses: ₹{expenses:,.2f}")
-        advice.append(f"🏦 Net Savings: ₹{net_savings:,.2f} ({savings_rate:.1f}% of income)")
-
-        # Income Analysis
+        # Add savings advice if needed
         if income > 0:
-            advice.append("\n📈 Income Breakdown:")
-            for category, total in income_categories:
-                percentage = (total / income * 100) if income > 0 else 0
-                advice.append(f"  • {category}: ₹{total:,.2f} ({percentage:.1f}% of total income)")
+            if savings_rate < 0:
+                urgent_alerts.append("🚨 ALERT: You are spending more than your income this month!")
+            elif savings_rate < 20:
+                warnings.append(f"⚠️ Your savings rate is only {savings_rate:.1f}%. Aim for at least 20% savings.")
+            elif savings_rate > 30:
+                positive_notes.append(f"✅ Great job! Your savings rate is {savings_rate:.1f}%.")
 
-        # Expense Analysis
-        if expenses > 0:
-            advice.append("\n📊 Expense Breakdown:")
-            for category, total in expense_categories:
-                percentage = (total / expenses * 100) if expenses > 0 else 0
-                advice.append(f"  • {category}: ₹{total:,.2f} ({percentage:.1f}% of total expenses)")
-                if percentage > 30:
-                    advice.append(f"    ⚠️ This category represents a large portion of your expenses.")
+        # Analyze each expense category
+        for row in current_month:
+            if row['type'] == 'Expense':
+                category = row['category']
+                amount = float(row['total'])
+                
+                # Get threshold for category
+                threshold_percentage = CATEGORY_THRESHOLDS.get(category, 0.05)
+                threshold_amount = income * threshold_percentage
 
-        # Recent Transactions
-        if recent_transactions:
-            advice.append("\n📝 Recent Transactions:")
-            for txn in recent_transactions:
-                date = txn['date']
-                amount = float(txn['amount'])
-                sign = '+' if txn['type'] == 'Income' else '-'
-                advice.append(f"  • {date}: {sign}₹{amount:,.2f} - {txn['category']}")
-                if txn['note']:
-                    advice.append(f"    Note: {txn['note']}")
+                # Compare with threshold
+                if amount > threshold_amount:
+                    percentage_over = ((amount - threshold_amount) / threshold_amount * 100)
+                    if percentage_over > 50:
+                        urgent_alerts.append(f"🚨 {category}: Spending is {percentage_over:.1f}% over recommended limit!")
+                    elif percentage_over > 20:
+                        warnings.append(f"⚠️ {category}: Spending is {percentage_over:.1f}% over recommended limit.")
+                elif amount < threshold_amount * 0.5:
+                    positive_notes.append(f"✅ {category}: Good control on spending (under budget).")
 
-        # Financial Health Analysis
+                # Compare with previous month
+                prev_amount = next((float(row['total']) for row in previous_month 
+                                 if row['type'] == 'Expense' and row['category'] == category), 0)
+                if prev_amount > 0:
+                    change = ((amount - prev_amount) / prev_amount * 100)
+                    if change > 30:
+                        warnings.append(f"📈 {category}: Spending increased by {change:.1f}% from last month.")
+                    elif change < -20:
+                        positive_notes.append(f"📉 {category}: Reduced spending by {abs(change):.1f}% from last month.")
+
+        # Build final advice message
+        if urgent_alerts:
+            advice.extend(["🔴 Urgent Actions Needed:", *urgent_alerts, ""])
+
+        if warnings:
+            advice.extend(["🟡 Warnings:", *warnings, ""])
+
+        if positive_notes:
+            advice.extend(["🟢 Positive Notes:", *positive_notes, ""])
+
+        # Add general recommendations
         if income > 0:
-            advice.append("\n💡 Financial Health Analysis:")
-            if expenses > income:
-                advice.append("⚠️ Warning: Your expenses exceed your income!")
-                advice.append("Consider reducing expenses or finding additional income sources.")
-            elif expenses > (income * 0.8):
-                advice.append("⚠️ Caution: Your expenses are high relative to your income.")
-                advice.append("Try to keep expenses below 80% of your income for better financial health.")
-            else:
-                advice.append("✅ Good job! Your expenses are well within your income.")
-
-            # Savings Rate Analysis
+            advice.append("\n💡 Recommendations:")
             if savings_rate < 20:
-                advice.append("\n💡 Try to aim for at least 20% savings rate for good financial health.")
-            elif savings_rate < 30:
-                advice.append("\n✅ Good job! Your savings rate is healthy.")
+                advice.append("• Consider creating a monthly budget for each category")
+                advice.append("• Look for ways to reduce non-essential expenses")
+                advice.append("• Track your daily expenses more closely")
+            elif expenses > income * 0.8:
+                advice.append("• Try to maintain or reduce current spending levels")
+                advice.append("• Consider saving more for emergencies")
             else:
-                advice.append("\n🌟 Excellent! Your savings rate is above 30%.")
+                advice.append("• Consider investing your savings for better returns")
+                advice.append("• Keep maintaining your good financial habits")
 
-        if income == 0:
-            return jsonify({'advice': 'Add income transactions to get personalized advice.'})
-        
-        return jsonify({'advice': "\n".join(advice)})
+        return jsonify({'advice': "\n".join(advice) if advice else "Add more transactions to get personalized advice."})
+
     except Exception as e:
-        app.logger.error(f"[get_budget_advice] Error: {str(e)}")
-        return jsonify({'advice': 'Unable to generate budget advice at this time.'})
+        app.logger.error(f"Error generating budget advice: {str(e)}")
+        return jsonify({'error': 'Unable to generate advice at this time'}), 500
+
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/predict_category', methods=['POST'])
 def predict_category():
@@ -1609,7 +1603,9 @@ def get_category_advice():
         # Define category-specific thresholds and advice
         CATEGORY_THRESHOLDS = {
             'Housing': {
-                'threshold': 30000,
+                'threshold': 40000,  # Higher threshold for housing
+                'warning_threshold': 70,  # Warning at 70% of threshold
+                'critical_threshold': 85,  # Critical at 85% of threshold
                 'advice': [
                     "Consider negotiating rent or finding a more affordable place",
                     "Look for ways to reduce utility costs",
@@ -1622,7 +1618,9 @@ def get_category_advice():
                 ]
             },
             'Transportation': {
-                'threshold': 15000,
+                'threshold': 20000,  # Moderate threshold for transportation
+                'warning_threshold': 75,  # Warning at 75% of threshold
+                'critical_threshold': 90,  # Critical at 90% of threshold
                 'advice': [
                     "Consider using public transportation more often",
                     "Look for carpooling opportunities",
@@ -1635,7 +1633,9 @@ def get_category_advice():
                 ]
             },
             'Food': {
-                'threshold': 10000,
+                'threshold': 15000,  # Standard threshold for food
+                'warning_threshold': 80,  # Warning at 80% of threshold
+                'critical_threshold': 95,  # Critical at 95% of threshold
                 'advice': [
                     "Try meal planning to reduce food waste",
                     "Cook more meals at home",
@@ -1647,8 +1647,10 @@ def get_category_advice():
                     "Consider growing some basic vegetables at home"
                 ]
             },
-            'Health': {
-                'threshold': 8000,
+            'Healthcare': {
+                'threshold': 10000,  # Priority threshold for healthcare
+                'warning_threshold': 85,  # Warning at 85% of threshold
+                'critical_threshold': 95,  # Critical at 95% of threshold
                 'advice': [
                     "Consider getting health insurance if you haven't",
                     "Look for preventive care options",
@@ -1661,7 +1663,9 @@ def get_category_advice():
                 ]
             },
             'Entertainment': {
-                'threshold': 5000,
+                'threshold': 8000,  # Lower threshold for entertainment
+                'warning_threshold': 65,  # Warning at 65% of threshold
+                'critical_threshold': 80,  # Critical at 80% of threshold
                 'advice': [
                     "Look for free or low-cost entertainment options",
                     "Use streaming services instead of multiple subscriptions",
@@ -1671,6 +1675,51 @@ def get_category_advice():
                     "Cancel unused entertainment subscriptions",
                     "Look for free community events and activities",
                     "Consider sharing subscription costs with family or friends"
+                ]
+            },
+            'Shopping': {
+                'threshold': 12000,  # Moderate threshold for shopping
+                'warning_threshold': 70,  # Warning at 70% of threshold
+                'critical_threshold': 85,  # Critical at 85% of threshold
+                'advice': [
+                    "Make a shopping list and stick to it",
+                    "Look for sales and discounts",
+                    "Consider second-hand or refurbished items"
+                ],
+                'critical_advice': [
+                    "Review all non-essential purchases",
+                    "Implement a waiting period for large purchases",
+                    "Use cashback and reward programs"
+                ]
+            },
+            'Education': {
+                'threshold': 25000,  # Higher threshold for education
+                'warning_threshold': 80,  # Warning at 80% of threshold
+                'critical_threshold': 90,  # Critical at 90% of threshold
+                'advice': [
+                    "Look for scholarships and grants",
+                    "Consider online learning options",
+                    "Buy used textbooks or rent them"
+                ],
+                'critical_advice': [
+                    "Explore education financing options",
+                    "Look for student discounts and deals",
+                    "Consider part-time work or work-study programs"
+                ]
+            },
+            'Utilities': {
+                'threshold': 8000,  # Standard threshold for utilities
+                'warning_threshold': 85,  # Warning at 85% of threshold
+                'critical_threshold': 95,  # Critical at 95% of threshold
+                'advice': [
+                    "Implement energy-saving measures",
+                    "Check for better utility plans",
+                    "Fix any leaks or inefficiencies"
+                ],
+                'critical_advice': [
+                    "Get an energy audit",
+                    "Consider switching utility providers",
+                    "Invest in energy-efficient appliances"
                 ]
             }
         }
@@ -1719,6 +1768,8 @@ def get_category_advice():
         # Get category threshold and advice
         category_info = CATEGORY_THRESHOLDS.get(category, {
             'threshold': historical_avg * 1.2 if historical_avg > 0 else 5000,
+            'warning_threshold': 75,
+            'critical_threshold': 90,
             'advice': [
                 "Track your spending in this category",
                 "Set a budget and stick to it",
@@ -1734,6 +1785,8 @@ def get_category_advice():
         threshold = category_info['threshold']
         advice_list = category_info['advice']
         critical_advice = category_info.get('critical_advice', advice_list)
+        warning_threshold = category_info.get('warning_threshold', 75)
+        critical_threshold = category_info.get('critical_threshold', 90)
         
         # Generate response with enhanced analysis
         response = {
@@ -1755,7 +1808,7 @@ def get_category_advice():
         threshold_percentage = (current_spent / threshold * 100) if threshold > 0 else 0
         
         # Determine status and advice based on spending patterns
-        if threshold_percentage >= 90:
+        if threshold_percentage >= critical_threshold:
             response['status'] = 'critical'
             response['message'] = f"⚠️ CRITICAL ALERT: You've spent {threshold_percentage:.1f}% of your monthly budget for {category}!"
             response['advice'] = critical_advice
@@ -1767,7 +1820,7 @@ def get_category_advice():
             if highest_transaction > threshold * 0.5:
                 response['advice'].append(f"Your highest transaction (₹{highest_transaction:.2f}) represents a significant portion of your budget. Try to avoid such large expenses.")
             
-        elif threshold_percentage >= 75:
+        elif threshold_percentage >= warning_threshold:
             response['status'] = 'warning'
             response['message'] = f"⚠️ Warning: You've spent {threshold_percentage:.1f}% of your monthly budget."
             response['advice'] = advice_list

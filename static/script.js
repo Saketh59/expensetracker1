@@ -1740,8 +1740,13 @@ async function handleCategoryChange(category) {
             throw new Error(adviceData.error || 'Failed to get category advice');
         }
 
-        // Calculate percentage of threshold used
-        const percentageUsed = (adviceData.current_spent / adviceData.threshold * 100).toFixed(1);
+        // Calculate percentage based on category-specific threshold from the backend
+        const percentageUsed = adviceData.current_spent > 0 && adviceData.threshold > 0 
+            ? ((adviceData.current_spent / adviceData.threshold) * 100).toFixed(1)
+            : 0;
+        
+        const warningThreshold = adviceData.warning_threshold || 75;
+        const criticalThreshold = adviceData.critical_threshold || 90;
         
         // Update the advice section
         if (categoryAdviceSection) {
@@ -1768,8 +1773,15 @@ async function handleCategoryChange(category) {
                                          aria-valuenow="${percentageUsed}"
                                          aria-valuemin="0"
                                          aria-valuemax="100">
+                                         ${percentageUsed}%
                                     </div>
                                 </div>
+                            </div>
+                            
+                            <div class="mt-2">
+                                <small class="text-muted">
+                                    Warning Level: ${warningThreshold}% | Critical Level: ${criticalThreshold}%
+                                </small>
                             </div>
                         </div>
                         
@@ -1796,9 +1808,6 @@ async function handleCategoryChange(category) {
         if (mainTransactionsSection) {
             mainTransactionsSection.style.display = 'block';
         }
-
-        // Update transactions table with filtered data
-        await loadTransactions();
 
     } catch (error) {
         console.error('Error updating category view:', error);

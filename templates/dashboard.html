@@ -529,10 +529,13 @@
                 throw new Error(adviceData.error || 'Failed to get category advice');
             }
 
+            // Calculate percentage based on category-specific threshold
+            const percentageUsed = ((adviceData.current_spent / adviceData.total_income) * 100).toFixed(1);
+            const warningThreshold = adviceData.warning_threshold || 75;
+            const criticalThreshold = adviceData.critical_threshold || 90;
+
             // Update category advice section
             if (categoryAdvice) {
-                const percentageUsed = (adviceData.current_spent / adviceData.threshold * 100).toFixed(1);
-                
                 categoryAdvice.innerHTML = `
                     <div class="card mb-4">
                         <div class="card-body">
@@ -551,8 +554,15 @@
                                              aria-valuenow="${percentageUsed}" 
                                              aria-valuemin="0" 
                                              aria-valuemax="100">
+                                             ${percentageUsed}%
                                         </div>
                                     </div>
+                                </div>
+                                
+                                <div class="mt-2">
+                                    <small class="text-muted">
+                                        Warning Level: ${warningThreshold}% | Critical Level: ${criticalThreshold}%
+                                    </small>
                                 </div>
                             </div>
                             
